@@ -14,6 +14,8 @@ RUN npm ci && npm rebuild better-sqlite3 --build-from-source
 # Copy application source
 COPY . .
 
-EXPOSE 3001
+# Railway injects PORT dynamically — do not hardcode EXPOSE
+ARG PORT=3001
+EXPOSE $PORT
 
 CMD ["node", "server.js"]
