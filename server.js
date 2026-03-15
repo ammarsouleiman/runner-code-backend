@@ -173,9 +173,9 @@ app.delete('/api/auth/account', verifyToken, (req, res) => {
 });
 
 // ── Start ─────────────────────────────────────────────────────────────────────
-app.listen(PORT, () => {
+app.listen(PORT, '0.0.0.0', () => {
   console.log('\n🚀 Runner Code Auth Server');
-  console.log(`📡 Running on: http://localhost:${PORT}`);
+  console.log(`📡 Running on: http://0.0.0.0:${PORT}`);
   console.log(`💾 Database:   ${path.join(__dirname, 'database.db')}`);
   console.log('\n✅ Ready to accept connections\n');
 });
