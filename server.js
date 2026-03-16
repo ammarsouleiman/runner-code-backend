@@ -198,7 +198,8 @@ app.post('/api/chat', verifyToken, async (req, res) => {
 
     if (!upstream.ok) {
       const err = await upstream.json().catch(() => ({}));
-      return res.status(upstream.status).json(err);
+      const status = upstream.status === 404 ? 502 : upstream.status;
+      return res.status(status).json(err);
     }
 
     // Stream response directly to client
@@ -207,7 +208,6 @@ app.post('/api/chat', verifyToken, async (req, res) => {
     res.setHeader('Cache-Control', 'no-cache');
     Readable.fromWeb(upstream.body).pipe(res);
   } catch (err) {
-    console.error('Chat proxy error:', err);
     res.status(502).json({ error: 'Upstream AI error' });
   }
 });
