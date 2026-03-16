@@ -10,7 +10,7 @@ const path = require('path');
 require('dotenv').config({ path: path.join(__dirname, '.env') });
 
 const app = express();
-const PORT = process.env.PORT || 3001;
+const PORT = process.env.PORT || 8080;
 const JWT_SECRET = process.env.JWT_SECRET || 'runner-code-secret-key-change-me';
 
 // ── Database setup ────────────────────────────────────────────────────────────
@@ -173,6 +173,48 @@ app.delete('/api/auth/account', verifyToken, (req, res) => {
   db.prepare('DELETE FROM users WHERE id = ?').run(req.user.id);
   console.log(`🗑️  Account deleted: ${user.name} (${user.email})`);
   res.json({ message: 'Account deleted successfully' });
+});
+
+// ── GET /admin/users ──────────────────────────────────────────────────────────
+// Protected with ADMIN_KEY env variable — returns all users as HTML table
+app.get('/admin/users', (req, res) => {
+  const adminKey = process.env.ADMIN_KEY;
+  if (!adminKey || req.query.key !== adminKey) {
+    return res.status(401).send('Unauthorized');
+  }
+  const users = db.prepare('SELECT id, name, email, country, created_at FROM users ORDER BY created_at DESC').all();
+  const rows = users.map(u => `
+    <tr>
+      <td>${u.id}</td>
+      <td>${u.name}</td>
+      <td>${u.email}</td>
+      <td>${u.country || '—'}</td>
+      <td>${u.created_at || '—'}</td>
+    </tr>`).join('');
+  res.send(`<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <title>Runner Code — Users</title>
+  <style>
+    body { font-family: sans-serif; background: #0f0f0f; color: #eee; padding: 32px; }
+    h1 { color: #E31E24; margin-bottom: 8px; }
+    p  { color: #888; margin-bottom: 24px; }
+    table { width: 100%; border-collapse: collapse; }
+    th { background: #1a1a1a; color: #E31E24; padding: 10px 14px; text-align: left; font-size: 13px; }
+    td { padding: 10px 14px; border-bottom: 1px solid #222; font-size: 13px; }
+    tr:hover td { background: #1a1a1a; }
+  </style>
+</head>
+<body>
+  <h1>Runner Code — Users</h1>
+  <p>Total: <strong>${users.length}</strong> user${users.length !== 1 ? 's' : ''}</p>
+  <table>
+    <thead><tr><th>#</th><th>Name</th><th>Email</th><th>Country</th><th>Registered</th></tr></thead>
+    <tbody>${rows}</tbody>
+  </table>
+</body>
+</html>`);
 });
 
 // ── Start ─────────────────────────────────────────────────────────────────────
