@@ -6,6 +6,7 @@ const bcrypt = require('bcryptjs');
 const jwt = require('jsonwebtoken');
 const Database = require('better-sqlite3');
 const path = require('path');
+const { Readable } = require('stream');
 
 require('dotenv').config({ path: path.join(__dirname, '.env') });
 
@@ -201,10 +202,12 @@ app.post('/api/chat', verifyToken, async (req, res) => {
     }
 
     // Stream response directly to client
+    // upstream.body is a Web API ReadableStream — convert to Node.js stream before piping
     res.setHeader('Content-Type', contentType);
     res.setHeader('Cache-Control', 'no-cache');
-    upstream.body.pipe(res);
+    Readable.fromWeb(upstream.body).pipe(res);
   } catch (err) {
+    console.error('Chat proxy error:', err);
     res.status(502).json({ error: 'Upstream AI error' });
   }
 });
