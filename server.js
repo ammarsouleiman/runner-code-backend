@@ -175,6 +175,61 @@ app.delete('/api/auth/account', verifyToken, (req, res) => {
   res.json({ message: 'Account deleted successfully' });
 });
 
+// ── POST /api/chat ────────────────────────────────────────────────────────────
+// Proxy to OpenRouter — keeps API key server-side only
+app.post('/api/chat', verifyToken, async (req, res) => {
+  const OPENROUTER_KEY = process.env.OPENROUTER_API_KEY;
+  if (!OPENROUTER_KEY) return res.status(503).json({ error: 'AI service not configured' });
+
+  try {
+    const upstream = await fetch('https://openrouter.ai/api/v1/chat/completions', {
+      method: 'POST',
+      headers: {
+        'Authorization': `Bearer ${OPENROUTER_KEY}`,
+        'Content-Type': 'application/json',
+        'HTTP-Referer': 'https://platform.runner-code.com',
+        'X-Title': 'Runner Code AI',
+      },
+      body: JSON.stringify(req.body),
+    });
+
+    const contentType = upstream.headers.get('content-type') || '';
+
+    if (!upstream.ok) {
+      const err = await upstream.json().catch(() => ({}));
+      return res.status(upstream.status).json(err);
+    }
+
+    // Stream response directly to client
+    res.setHeader('Content-Type', contentType);
+    res.setHeader('Cache-Control', 'no-cache');
+    upstream.body.pipe(res);
+  } catch (err) {
+    res.status(502).json({ error: 'Upstream AI error' });
+  }
+});
+
+// ── GET /api/images ───────────────────────────────────────────────────────────
+// Proxy to Pexels — keeps API key server-side only
+app.get('/api/images', verifyToken, async (req, res) => {
+  const PEXELS_KEY = process.env.PEXELS_API_KEY;
+  if (!PEXELS_KEY) return res.status(503).json({ error: 'Image service not configured' });
+
+  const { query, per_page = '6', page = '1' } = req.query;
+  if (!query) return res.status(400).json({ error: 'query is required' });
+
+  try {
+    const upstream = await fetch(
+      `https://api.pexels.com/v1/search?query=${encodeURIComponent(query)}&per_page=${per_page}&page=${page}`,
+      { headers: { Authorization: PEXELS_KEY } }
+    );
+    const data = await upstream.json();
+    res.json(data);
+  } catch (err) {
+    res.status(502).json({ error: 'Upstream image error' });
+  }
+});
+
 // ── GET /admin/users ──────────────────────────────────────────────────────────
 // Protected with ADMIN_KEY env variable — returns all users as HTML table
 app.get('/admin/users', (req, res) => {
