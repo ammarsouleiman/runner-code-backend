@@ -191,6 +191,11 @@ app.post('/api/auth/login', authLimiter, (req, res) => {
   const normalizedEmail = email.trim().toLowerCase();
   const user = db.prepare('SELECT * FROM users WHERE email = ?').get(normalizedEmail);
 
+  // Google-only account — no password set
+  if (user && user.password_hash === 'GOOGLE_AUTH') {
+    return res.status(400).json({ error: 'This account uses Google Sign-In. Please use the "Sign in with Google" button.' });
+  }
+
   if (!user || !bcrypt.compareSync(password, user.password_hash)) {
     return res.status(401).json({ error: 'Invalid email or password' });
   }
@@ -220,6 +225,19 @@ app.get('/api/auth/me', verifyToken, (req, res) => {
   }
 
   res.json({ user });
+});
+
+// ── PATCH /api/auth/profile ──────────────────────────────────────────────────
+// Used by Google sign-in users to set country + password after first login
+app.patch('/api/auth/profile', verifyToken, (req, res) => {
+  const { country, password } = req.body;
+  if (!country?.trim()) return res.status(400).json({ error: 'Country is required' });
+  if (!password || password.length < 8) return res.status(400).json({ error: 'Password must be at least 8 characters' });
+
+  const passwordHash = bcrypt.hashSync(password, 10);
+  db.prepare('UPDATE users SET country = ?, password_hash = ? WHERE id = ?')
+    .run(country.trim(), passwordHash, req.user.id);
+  res.json({ country: country.trim() });
 });
 
 // ── POST /api/auth/logout ─────────────────────────────────────────────────────
