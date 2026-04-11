@@ -170,8 +170,8 @@ app.post('/api/auth/register', authLimiter, (req, res) => {
     return res.status(400).json({ error: 'Invalid email address' });
   }
 
-  if (password.length < 6) {
-    return res.status(400).json({ error: 'Password must be at least 6 characters' });
+  if (password.length < 8) {
+    return res.status(400).json({ error: 'Password must be at least 8 characters' });
   }
 
   const normalizedEmail = email.trim().toLowerCase();
@@ -435,11 +435,13 @@ app.get('/api/images', verifyToken, async (req, res) => {
   if (!PEXELS_KEY) return res.status(503).json({ error: 'Image service not configured' });
 
   const { query, per_page = '6', page = '1' } = req.query;
+  const safePerPage = Math.min(Math.max(parseInt(per_page, 10) || 6, 1), 20);
+  const safePage = Math.max(parseInt(page, 10) || 1, 1);
   if (!query) return res.status(400).json({ error: 'query is required' });
 
   try {
     const upstream = await fetch(
-      `https://api.pexels.com/v1/search?query=${encodeURIComponent(query)}&per_page=${per_page}&page=${page}`,
+      `https://api.pexels.com/v1/search?query=${encodeURIComponent(query)}&per_page=${safePerPage}&page=${safePage}`,
       { headers: { Authorization: PEXELS_KEY } }
     );
     const data = await upstream.json();
