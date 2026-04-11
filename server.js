@@ -7,12 +7,19 @@ const jwt = require('jsonwebtoken');
 const Database = require('better-sqlite3');
 const path = require('path');
 const { Readable } = require('stream');
+const rateLimit = require('express-rate-limit');
+const { OAuth2Client } = require('google-auth-library');
 
 require('dotenv').config({ path: path.join(__dirname, '.env') });
 
 const app = express();
 const PORT = process.env.PORT || 8080;
-const JWT_SECRET = process.env.JWT_SECRET || 'runner-code-secret-key-change-me';
+
+if (!process.env.JWT_SECRET && process.env.NODE_ENV === 'production') {
+  console.error('\u274c FATAL: JWT_SECRET is not set in production');
+  process.exit(1);
+}
+const JWT_SECRET = process.env.JWT_SECRET || 'dev-only-insecure-secret';
 
 // ── Database setup ────────────────────────────────────────────────────────────
 const db = new Database(path.join(__dirname, 'database.db'));
@@ -57,6 +64,9 @@ db.exec(`
   )
 `);
 
+// ── Migrations ────────────────────────────────────────────────────────────────
+try { db.exec('ALTER TABLE users ADD COLUMN google_id TEXT'); } catch {}
+
 // ── Middleware ────────────────────────────────────────────────────────────────
 const ALLOWED_ORIGINS = [
   'https://platform.runner-code.com',
@@ -76,6 +86,23 @@ app.use(cors({
   credentials: true,
 }));
 app.use(express.json({ limit: '20mb' }));
+
+// ── Google OAuth client ─────────────────────────────────────────────────────
+const googleClient = process.env.GOOGLE_CLIENT_ID
+  ? new OAuth2Client(process.env.GOOGLE_CLIENT_ID)
+  : null;
+
+// ── Rate limiters ─────────────────────────────────────────────────────────────
+const authLimiter = rateLimit({ windowMs: 15 * 60 * 1000, max: 10, standardHeaders: true, legacyHeaders: false });
+const chatLimiter = rateLimit({ windowMs: 60 * 1000, max: 30, standardHeaders: true, legacyHeaders: false });
+
+// ── Allowed AI models ─────────────────────────────────────────────────────────
+const ALLOWED_MODELS = new Set([
+  'openai/gpt-4o', 'anthropic/claude-3.7-sonnet', 'openai/o1',
+  'openai/gpt-4o-mini', 'anthropic/claude-3-5-haiku', 'google/gemini-2.5-flash',
+  'meta-llama/llama-3.3-70b-instruct:free', 'qwen/qwen3-coder:free',
+  'mistralai/mistral-small-3.1-24b-instruct:free', 'google/gemma-3-27b-it:free',
+]);
 
 // ── Security headers ──────────────────────────────────────────────────────────
 app.use((req, res, next) => {
@@ -106,7 +133,7 @@ function verifyToken(req, res, next) {
 }
 
 // ── POST /api/auth/register ───────────────────────────────────────────────────
-app.post('/api/auth/register', (req, res) => {
+app.post('/api/auth/register', authLimiter, (req, res) => {
   const { name, email, password, country } = req.body;
 
   if (!name?.trim() || !email?.trim() || !password?.trim()) {
@@ -154,7 +181,7 @@ app.post('/api/auth/register', (req, res) => {
 });
 
 // ── POST /api/auth/login ──────────────────────────────────────────────────────
-app.post('/api/auth/login', (req, res) => {
+app.post('/api/auth/login', authLimiter, (req, res) => {
   const { email, password } = req.body;
 
   if (!email?.trim() || !password?.trim()) {
@@ -212,11 +239,75 @@ app.delete('/api/auth/account', verifyToken, (req, res) => {
   res.json({ message: 'Account deleted successfully' });
 });
 
+// ── POST /api/auth/google ───────────────────────────────────────────────────
+app.post('/api/auth/google', authLimiter, async (req, res) => {
+  if (!googleClient) return res.status(503).json({ error: 'Google sign-in not configured' });
+
+  const { token } = req.body;
+  if (!token) return res.status(400).json({ error: 'Token is required' });
+
+  try {
+    const ticket = await googleClient.verifyIdToken({
+      idToken: token,
+      audience: process.env.GOOGLE_CLIENT_ID,
+    });
+    const payload = ticket.getPayload();
+    const { sub: googleId, email, name, picture, email_verified: googleEmailVerified } = payload;
+
+    if (!googleEmailVerified) {
+      return res.status(400).json({ error: 'Google account email is not verified' });
+    }
+
+    const normalizedEmail = email.toLowerCase();
+
+    // 1. Look up by google_id first (returning user)
+    let user = db.prepare('SELECT * FROM users WHERE google_id = ?').get(googleId);
+
+    if (!user) {
+      // 2. Check if email exists under a password-based account
+      const emailUser = db.prepare('SELECT * FROM users WHERE email = ?').get(normalizedEmail);
+      if (emailUser) {
+        // Email already registered with email/password — block auto-linking
+        return res.status(409).json({
+          error: 'This email is already registered. Please sign in with your email and password instead.',
+        });
+      }
+
+      // 3. Genuinely new user — create account
+      const displayName = name || normalizedEmail.split('@')[0];
+      const result = db.prepare(
+        'INSERT INTO users (name, email, password_hash, google_id) VALUES (?, ?, ?, ?)'
+      ).run(displayName, normalizedEmail, 'GOOGLE_AUTH', googleId);
+      user = db.prepare('SELECT id, name, email, country FROM users WHERE id = ?').get(result.lastInsertRowid);
+      console.log(`✅ New Google user: ${displayName} (${normalizedEmail})`);
+    }
+
+    const jwtToken = jwt.sign(
+      { id: user.id, name: user.name, email: user.email },
+      JWT_SECRET,
+      { expiresIn: '30d' }
+    );
+
+    res.json({
+      token: jwtToken,
+      user: { id: user.id, name: user.name, email: user.email, country: user.country },
+    });
+  } catch (err) {
+    console.error('Google auth error:', err.message);
+    res.status(400).json({ error: 'Invalid Google token' });
+  }
+});
+
 // ── POST /api/chat ────────────────────────────────────────────────────────────
 // Proxy to OpenRouter — keeps API key server-side only
-app.post('/api/chat', verifyToken, async (req, res) => {
+app.post('/api/chat', verifyToken, chatLimiter, async (req, res) => {
   const OPENROUTER_KEY = process.env.OPENROUTER_API_KEY;
   if (!OPENROUTER_KEY) return res.status(503).json({ error: 'AI service not configured' });
+
+  const { model } = req.body;
+  if (model && !ALLOWED_MODELS.has(model)) {
+    return res.status(400).json({ error: 'Model not allowed' });
+  }
 
   try {
     const upstream = await fetch('https://openrouter.ai/api/v1/chat/completions', {
