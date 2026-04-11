@@ -193,7 +193,7 @@ app.post('/api/auth/register', authLimiter, (req, res) => {
     { expiresIn: '30d' }
   );
 
-  console.log(`✅ New user registered: ${name.trim()} (${normalizedEmail})`);
+  console.log(`✅ New user registered (id=${result.lastInsertRowid})`);
 
   setAuthCookie(res, token);
   res.status(201).json({
@@ -232,7 +232,7 @@ app.post('/api/auth/login', authLimiter, (req, res) => {
     { expiresIn: '30d' }
   );
 
-  console.log(`✅ User logged in: ${user.name} (${user.email})`);
+  console.log(`✅ User logged in (id=${user.id})`);
 
   setAuthCookie(res, token);
   res.json({
@@ -297,7 +297,7 @@ app.post('/api/auth/complete-profile', authLimiter, (req, res) => {
       'INSERT INTO users (name, email, password_hash, google_id, country) VALUES (?, ?, ?, ?, ?)'
     ).run(name, email, passwordHash, googleId, country.trim());
     user = db.prepare('SELECT id, name, email, country FROM users WHERE id = ?').get(result.lastInsertRowid);
-    console.log(`✅ New Google user created: ${name} (${email})`);
+    console.log(`✅ New Google user created (id=${user.id})`);
   }
 
   const token = jwt.sign(
@@ -323,7 +323,7 @@ app.delete('/api/auth/account', verifyToken, (req, res) => {
     return res.status(404).json({ error: 'User not found' });
   }
   db.prepare('DELETE FROM users WHERE id = ?').run(req.user.id);
-  console.log(`🗑️  Account deleted: ${user.name} (${user.email})`);
+  console.log(`🗑️  Account deleted (id=${user.id})`);
   res.json({ message: 'Account deleted successfully' });
 });
 
@@ -367,7 +367,7 @@ app.post('/api/auth/google', authLimiter, async (req, res) => {
         JWT_SECRET,
         { expiresIn: '15m' }
       );
-      console.log(`🔑 Google setup token issued for: ${normalizedEmail}`);
+      console.log(`🔑 Google setup token issued`);
       return res.json({ needsSetup: true, setupToken });
     }
 
