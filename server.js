@@ -467,39 +467,91 @@ app.get('/admin/users', (req, res) => {
   if (!adminKey || req.query.key !== adminKey) {
     return res.status(401).send('Unauthorized');
   }
-  const users = db.prepare('SELECT id, name, email, country, created_at FROM users ORDER BY created_at DESC').all();
-  const rows = users.map(u => `
+  const users = db.prepare('SELECT id, name, email, country, password_hash, google_id, created_at FROM users ORDER BY created_at DESC').all();
+  const key = encodeURIComponent(req.query.key);
+  const rows = users.map(u => {
+    const authType = u.google_id ? '🔵 Google' : u.password_hash === 'GOOGLE_AUTH' ? '🔵 Google' : '🔑 Password';
+    return `
     <tr>
       <td>${u.id}</td>
       <td>${escapeHtml(u.name)}</td>
       <td>${escapeHtml(u.email)}</td>
       <td>${escapeHtml(u.country || '—')}</td>
+      <td>${authType}</td>
       <td>${escapeHtml(u.created_at || '—')}</td>
-    </tr>`).join('');
+      <td>
+        <button onclick="deleteUser(${u.id}, '${escapeHtml(u.name)}')" 
+          style="background:#E31E24;color:#fff;border:none;padding:4px 10px;border-radius:6px;cursor:pointer;font-size:12px;"
+        >Delete</button>
+      </td>
+    </tr>`;
+  }).join('');
   res.send(`<!DOCTYPE html>
 <html lang="en">
 <head>
   <meta charset="UTF-8">
-  <title>Runner Code — Users</title>
+  <title>Runner Code — Admin</title>
   <style>
     body { font-family: sans-serif; background: #0f0f0f; color: #eee; padding: 32px; }
-    h1 { color: #E31E24; margin-bottom: 8px; }
+    h1 { color: #E31E24; margin-bottom: 4px; }
     p  { color: #888; margin-bottom: 24px; }
     table { width: 100%; border-collapse: collapse; }
     th { background: #1a1a1a; color: #E31E24; padding: 10px 14px; text-align: left; font-size: 13px; }
-    td { padding: 10px 14px; border-bottom: 1px solid #222; font-size: 13px; }
+    td { padding: 10px 14px; border-bottom: 1px solid #222; font-size: 13px; vertical-align: middle; }
     tr:hover td { background: #1a1a1a; }
+    .toast { position:fixed; bottom:24px; right:24px; background:#1a1a1a; border:1px solid #333; color:#eee; padding:12px 20px; border-radius:10px; font-size:14px; display:none; }
   </style>
 </head>
 <body>
-  <h1>Runner Code — Users</h1>
+  <h1>Runner Code — Admin</h1>
   <p>Total: <strong>${users.length}</strong> user${users.length !== 1 ? 's' : ''}</p>
   <table>
-    <thead><tr><th>#</th><th>Name</th><th>Email</th><th>Country</th><th>Registered</th></tr></thead>
-    <tbody>${rows}</tbody>
+    <thead><tr><th>#</th><th>Name</th><th>Email</th><th>Country</th><th>Auth</th><th>Registered</th><th>Action</th></tr></thead>
+    <tbody id="tbody">${rows}</tbody>
   </table>
+  <div class="toast" id="toast"></div>
+  <script>
+    function showToast(msg, ok) {
+      const t = document.getElementById('toast');
+      t.textContent = msg;
+      t.style.display = 'block';
+      t.style.borderColor = ok ? '#34A853' : '#E31E24';
+      setTimeout(() => t.style.display = 'none', 3000);
+    }
+    function deleteUser(id, name) {
+      if (!confirm('Delete account of ' + name + '? This cannot be undone.')) return;
+      fetch('/admin/users/' + id + '?key=${key}', { method: 'DELETE' })
+        .then(r => r.json())
+        .then(d => {
+          if (d.ok) {
+            document.querySelector('tr[data-id="' + id + '"]')?.remove();
+            showToast('✅ Deleted: ' + name, true);
+            // Remove row by finding button's parent row
+            document.querySelectorAll('tr').forEach(tr => {
+              if (tr.innerHTML.includes('deleteUser(' + id + ',')) tr.remove();
+            });
+          } else { showToast('❌ ' + (d.error || 'Failed'), false); }
+        })
+        .catch(() => showToast('❌ Network error', false));
+    }
+  <\/script>
 </body>
 </html>`);
+});
+
+// ── DELETE /admin/users/:id ───────────────────────────────────────────────────
+app.delete('/admin/users/:id', (req, res) => {
+  const adminKey = process.env.ADMIN_KEY;
+  if (!adminKey || req.query.key !== adminKey) {
+    return res.status(401).json({ error: 'Unauthorized' });
+  }
+  const id = parseInt(req.params.id, 10);
+  if (!id) return res.status(400).json({ error: 'Invalid id' });
+  const user = db.prepare('SELECT id FROM users WHERE id = ?').get(id);
+  if (!user) return res.status(404).json({ error: 'User not found' });
+  db.prepare('DELETE FROM users WHERE id = ?').run(id);
+  console.log(`🗑️  Admin deleted user (id=${id})`);
+  res.json({ ok: true });
 });
 
 // ── GET /api/conversations ──────────────────────────────────────────────────
