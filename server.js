@@ -25,6 +25,35 @@ db.exec(`
     password_hash TEXT   NOT NULL,
     country      TEXT,
     created_at   DATETIME DEFAULT CURRENT_TIMESTAMP
+  );
+
+  CREATE TABLE IF NOT EXISTS conversations (
+    id         TEXT    PRIMARY KEY,
+    user_id    INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    title      TEXT    NOT NULL DEFAULT 'New Chat',
+    model      TEXT    NOT NULL DEFAULT 'google/gemini-2.5-flash',
+    messages   TEXT    NOT NULL DEFAULT '[]',
+    created_at INTEGER NOT NULL,
+    updated_at INTEGER NOT NULL
+  );
+
+  CREATE TABLE IF NOT EXISTS reactions (
+    user_id         INTEGER NOT NULL,
+    message_id      TEXT    NOT NULL,
+    conversation_id TEXT    NOT NULL,
+    reaction        TEXT    NOT NULL CHECK(reaction IN ('up', 'down')),
+    PRIMARY KEY (user_id, message_id),
+    FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
+  );
+
+  CREATE TABLE IF NOT EXISTS message_media (
+    message_id TEXT    NOT NULL,
+    user_id    INTEGER NOT NULL,
+    image_url  TEXT,
+    image_urls TEXT,
+    pdf_url    TEXT,
+    PRIMARY KEY (message_id, user_id),
+    FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
   )
 `);
 
@@ -46,7 +75,14 @@ app.use(cors({
   },
   credentials: true,
 }));
-app.use(express.json());
+app.use(express.json({ limit: '20mb' }));
+
+// ── Security headers ──────────────────────────────────────────────────────────
+app.use((req, res, next) => {
+  res.setHeader('X-Frame-Options', 'SAMEORIGIN');
+  res.setHeader('X-Content-Type-Options', 'nosniff');
+  next();
+});
 
 // ── Health check ──────────────────────────────────────────────────────────────
 app.get('/health', (req, res) => res.json({ status: 'ok' }));
@@ -235,6 +271,15 @@ app.get('/api/images', verifyToken, async (req, res) => {
 
 // ── GET /admin/users ──────────────────────────────────────────────────────────
 // Protected with ADMIN_KEY env variable — returns all users as HTML table
+function escapeHtml(str) {
+  return String(str)
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;')
+    .replace(/'/g, '&#039;');
+}
+
 app.get('/admin/users', (req, res) => {
   const adminKey = process.env.ADMIN_KEY;
   if (!adminKey || req.query.key !== adminKey) {
@@ -244,10 +289,10 @@ app.get('/admin/users', (req, res) => {
   const rows = users.map(u => `
     <tr>
       <td>${u.id}</td>
-      <td>${u.name}</td>
-      <td>${u.email}</td>
-      <td>${u.country || '—'}</td>
-      <td>${u.created_at || '—'}</td>
+      <td>${escapeHtml(u.name)}</td>
+      <td>${escapeHtml(u.email)}</td>
+      <td>${escapeHtml(u.country || '—')}</td>
+      <td>${escapeHtml(u.created_at || '—')}</td>
     </tr>`).join('');
   res.send(`<!DOCTYPE html>
 <html lang="en">
@@ -273,6 +318,149 @@ app.get('/admin/users', (req, res) => {
   </table>
 </body>
 </html>`);
+});
+
+// ── GET /api/conversations ──────────────────────────────────────────────────
+app.get('/api/conversations', verifyToken, (req, res) => {
+  const convs = db.prepare(
+    'SELECT id, title, model, messages, created_at, updated_at FROM conversations WHERE user_id = ? ORDER BY updated_at DESC'
+  ).all(req.user.id);
+  res.json(convs.map(c => ({ ...c, messages: JSON.parse(c.messages) })));
+});
+
+// ── PUT /api/conversations/:id ────────────────────────────────────────────────
+app.put('/api/conversations/:id', verifyToken, (req, res) => {
+  const { id } = req.params;
+  const { title, model, messages, created_at, updated_at } = req.body;
+  if (!id || !Array.isArray(messages)) return res.status(400).json({ error: 'Missing fields' });
+
+  // Strip base64 blobs before storing to keep conversations table lean
+  const stripped = messages.map(m => ({
+    ...m,
+    imageUrl: undefined,
+    imageUrls: undefined,
+    pdfUrl: undefined,
+  }));
+
+  db.prepare(`
+    INSERT INTO conversations (id, user_id, title, model, messages, created_at, updated_at)
+    VALUES (?, ?, ?, ?, ?, ?, ?)
+    ON CONFLICT(id) DO UPDATE SET
+      title      = excluded.title,
+      model      = excluded.model,
+      messages   = excluded.messages,
+      updated_at = excluded.updated_at
+    WHERE conversations.user_id = ?
+  `).run(
+    id, req.user.id,
+    title || 'New Chat',
+    model || 'google/gemini-2.5-flash',
+    JSON.stringify(stripped),
+    created_at || Date.now(),
+    updated_at || Date.now(),
+    req.user.id
+  );
+
+  // Save media separately for any messages that have images/PDFs
+  const mediaMessages = messages.filter(m => m.imageUrl || (Array.isArray(m.imageUrls) && m.imageUrls.length > 0) || m.pdfUrl);
+  if (mediaMessages.length > 0) {
+    const upsertMedia = db.prepare(`
+      INSERT INTO message_media (message_id, user_id, image_url, image_urls, pdf_url)
+      VALUES (?, ?, ?, ?, ?)
+      ON CONFLICT(message_id, user_id) DO UPDATE SET
+        image_url  = COALESCE(excluded.image_url,  message_media.image_url),
+        image_urls = COALESCE(excluded.image_urls, message_media.image_urls),
+        pdf_url    = COALESCE(excluded.pdf_url,    message_media.pdf_url)
+    `);
+    const insertMediaBatch = db.transaction((msgs) => {
+      msgs.forEach(m => upsertMedia.run(
+        m.id, req.user.id,
+        m.imageUrl || null,
+        m.imageUrls ? JSON.stringify(m.imageUrls) : null,
+        m.pdfUrl || null
+      ));
+    });
+    insertMediaBatch(mediaMessages);
+  }
+
+  res.json({ ok: true });
+});
+
+// ── DELETE /api/conversations/:id ─────────────────────────────────────────────
+app.delete('/api/conversations/:id', verifyToken, (req, res) => {
+  db.prepare('DELETE FROM conversations WHERE id = ? AND user_id = ?').run(req.params.id, req.user.id);
+  db.prepare('DELETE FROM reactions WHERE conversation_id = ? AND user_id = ?').run(req.params.id, req.user.id);
+  db.prepare('DELETE FROM message_media WHERE message_id IN (SELECT id FROM json_each(?)) AND user_id = ?').run(
+    JSON.stringify([req.params.id]), req.user.id
+  );
+  // Simpler: delete all media rows for this user that belong to deleted conversation
+  // Since we don’t store conversation_id in message_media, clean via orphan check:
+  db.prepare(`
+    DELETE FROM message_media
+    WHERE user_id = ?
+      AND message_id NOT IN (
+        SELECT json_each.value
+        FROM conversations, json_each(json_extract(conversations.messages, '$[*].id'))
+        WHERE conversations.user_id = ?
+      )
+  `).run(req.user.id, req.user.id);
+  res.json({ ok: true });
+});
+
+// ── GET /api/media/:conversationId ──────────────────────────────────────────────
+app.get('/api/media/:conversationId', verifyToken, (req, res) => {
+  const conv = db.prepare('SELECT messages FROM conversations WHERE id = ? AND user_id = ?')
+    .get(req.params.conversationId, req.user.id);
+  if (!conv) return res.status(404).json({ error: 'Not found' });
+
+  const messages = JSON.parse(conv.messages);
+  const messageIds = messages.map(m => m.id);
+  if (messageIds.length === 0) return res.json({});
+
+  const placeholders = messageIds.map(() => '?').join(',');
+  const media = db.prepare(
+    `SELECT message_id, image_url, image_urls, pdf_url FROM message_media
+     WHERE user_id = ? AND message_id IN (${placeholders})`
+  ).all(req.user.id, ...messageIds);
+
+  const result = {};
+  media.forEach(m => {
+    result[m.message_id] = {
+      ...(m.image_url  ? { imageUrl:  m.image_url }                    : {}),
+      ...(m.image_urls ? { imageUrls: JSON.parse(m.image_urls) }       : {}),
+      ...(m.pdf_url    ? { pdfUrl:    m.pdf_url }                      : {}),
+    };
+  });
+  res.json(result);
+});
+
+// ── POST /api/reactions ───────────────────────────────────────────────────────
+app.post('/api/reactions', verifyToken, (req, res) => {
+  const { messageId, conversationId, reaction } = req.body;
+  if (!messageId || !conversationId || !['up', 'down'].includes(reaction)) {
+    return res.status(400).json({ error: 'Invalid reaction' });
+  }
+  db.prepare(`
+    INSERT INTO reactions (user_id, message_id, conversation_id, reaction)
+    VALUES (?, ?, ?, ?)
+    ON CONFLICT(user_id, message_id) DO UPDATE SET reaction = excluded.reaction
+  `).run(req.user.id, messageId, conversationId, reaction);
+  res.json({ ok: true });
+});
+
+// ── DELETE /api/reactions/:messageId ─────────────────────────────────────────
+app.delete('/api/reactions/:messageId', verifyToken, (req, res) => {
+  db.prepare('DELETE FROM reactions WHERE user_id = ? AND message_id = ?')
+    .run(req.user.id, req.params.messageId);
+  res.json({ ok: true });
+});
+
+// ── GET /api/reactions/:conversationId ───────────────────────────────────────
+app.get('/api/reactions/:conversationId', verifyToken, (req, res) => {
+  const rows = db.prepare(
+    'SELECT message_id, reaction FROM reactions WHERE user_id = ? AND conversation_id = ?'
+  ).all(req.user.id, req.params.conversationId);
+  res.json(rows);
 });
 
 // ── Start ─────────────────────────────────────────────────────────────────────
