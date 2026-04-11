@@ -470,7 +470,12 @@ app.get('/admin/users', (req, res) => {
   const users = db.prepare('SELECT id, name, email, country, password_hash, google_id, created_at FROM users ORDER BY created_at DESC').all();
   const key = encodeURIComponent(req.query.key);
   const rows = users.map(u => {
-    const authType = u.google_id ? '🔵 Google' : u.password_hash === 'GOOGLE_AUTH' ? '🔵 Google' : '🔑 Password';
+    const hasRealPassword = u.password_hash && u.password_hash !== 'GOOGLE_AUTH' && u.password_hash.startsWith('$2');
+    let authType;
+    if (u.google_id && hasRealPassword) authType = '🔵 Google + 🔑 Password';
+    else if (u.google_id)              authType = '🔵 Google only (no password)';
+    else if (hasRealPassword)          authType = '🔑 Password';
+    else                               authType = '⚠️ No auth';
     return `
     <tr>
       <td>${u.id}</td>
