@@ -23,7 +23,12 @@ if (!process.env.JWT_SECRET && process.env.NODE_ENV === 'production') {
 const JWT_SECRET = process.env.JWT_SECRET || 'dev-only-insecure-secret';
 
 // ── Database setup ────────────────────────────────────────────────────────────
-const db = new Database(path.join(__dirname, 'database.db'));
+// In production: use /app/data (Railway persistent volume)
+// In development: use local __dirname
+const DB_DIR = process.env.NODE_ENV === 'production'
+  ? '/app/data'
+  : __dirname;
+const db = new Database(path.join(DB_DIR, 'database.db'));
 
 db.exec(`
   CREATE TABLE IF NOT EXISTS users (
@@ -719,6 +724,6 @@ app.get('/api/reactions/:conversationId', verifyToken, (req, res) => {
 app.listen(PORT, '0.0.0.0', () => {
   console.log('\n🚀 Runner Code Auth Server');
   console.log(`📡 Running on: http://0.0.0.0:${PORT}`);
-  console.log(`💾 Database:   ${path.join(__dirname, 'database.db')}`);
+  console.log(`💾 Database:   ${path.join(DB_DIR, 'database.db')}`);
   console.log('\n✅ Ready to accept connections\n');
 });
