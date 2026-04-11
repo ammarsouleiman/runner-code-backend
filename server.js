@@ -72,6 +72,7 @@ try { db.exec('ALTER TABLE users ADD COLUMN google_id TEXT'); } catch {}
 // ── Middleware ────────────────────────────────────────────────────────────────
 const ALLOWED_ORIGINS = [
   'https://platform.runner-code.com',
+  'https://runner-code-backend-production.up.railway.app',
   'http://localhost:5173',
   'http://localhost:3000',
   'http://127.0.0.1:5173',
