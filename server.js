@@ -240,6 +240,49 @@ app.patch('/api/auth/profile', verifyToken, (req, res) => {
   res.json({ country: country.trim() });
 });
 
+// ── POST /api/auth/complete-profile ──────────────────────────────────────────
+// Second step for new Google users — creates account in DB after profile setup
+app.post('/api/auth/complete-profile', authLimiter, (req, res) => {
+  const { setupToken, country, password } = req.body;
+  if (!setupToken || !country?.trim() || !password || password.length < 8) {
+    return res.status(400).json({ error: 'setupToken, country, and password (min 8 chars) are required' });
+  }
+
+  let payload;
+  try {
+    payload = jwt.verify(setupToken, JWT_SECRET);
+  } catch {
+    return res.status(401).json({ error: 'Setup session expired. Please sign in with Google again.' });
+  }
+
+  if (!payload.setup) return res.status(401).json({ error: 'Invalid setup token' });
+
+  const { googleId, email, name } = payload;
+
+  // Guard: don't create duplicates if called twice
+  let user = db.prepare('SELECT * FROM users WHERE google_id = ?').get(googleId);
+  if (!user) {
+    const emailExists = db.prepare('SELECT id FROM users WHERE email = ?').get(email);
+    if (emailExists) {
+      return res.status(409).json({ error: 'This email is already registered.' });
+    }
+    const passwordHash = bcrypt.hashSync(password, 10);
+    const result = db.prepare(
+      'INSERT INTO users (name, email, password_hash, google_id, country) VALUES (?, ?, ?, ?, ?)'
+    ).run(name, email, passwordHash, googleId, country.trim());
+    user = db.prepare('SELECT id, name, email, country FROM users WHERE id = ?').get(result.lastInsertRowid);
+    console.log(`✅ New Google user created: ${name} (${email})`);
+  }
+
+  const token = jwt.sign(
+    { id: user.id, name: user.name, email: user.email },
+    JWT_SECRET,
+    { expiresIn: '30d' }
+  );
+
+  res.json({ token, user: { id: user.id, name: user.name, email: user.email, country: user.country } });
+});
+
 // ── POST /api/auth/logout ─────────────────────────────────────────────────────
 // Stateless JWT — client simply discards the token
 app.post('/api/auth/logout', (req, res) => {
@@ -285,19 +328,20 @@ app.post('/api/auth/google', authLimiter, async (req, res) => {
       // 2. Check if email exists under a password-based account
       const emailUser = db.prepare('SELECT * FROM users WHERE email = ?').get(normalizedEmail);
       if (emailUser) {
-        // Email already registered with email/password — block auto-linking
         return res.status(409).json({
           error: 'This email is already registered. Please sign in with your email and password instead.',
         });
       }
 
-      // 3. Genuinely new user — create account
+      // 3. New user — do NOT create in DB yet, return a setup token instead
       const displayName = name || normalizedEmail.split('@')[0];
-      const result = db.prepare(
-        'INSERT INTO users (name, email, password_hash, google_id) VALUES (?, ?, ?, ?)'
-      ).run(displayName, normalizedEmail, 'GOOGLE_AUTH', googleId);
-      user = db.prepare('SELECT id, name, email, country FROM users WHERE id = ?').get(result.lastInsertRowid);
-      console.log(`✅ New Google user: ${displayName} (${normalizedEmail})`);
+      const setupToken = jwt.sign(
+        { googleId, email: normalizedEmail, name: displayName, setup: true },
+        JWT_SECRET,
+        { expiresIn: '15m' }
+      );
+      console.log(`🔑 Google setup token issued for: ${normalizedEmail}`);
+      return res.json({ needsSetup: true, setupToken });
     }
 
     const jwtToken = jwt.sign(
