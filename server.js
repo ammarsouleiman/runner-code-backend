@@ -559,18 +559,14 @@ app.delete('/admin/users/:id', (req, res) => {
   const user = db.prepare('SELECT id FROM users WHERE id = ?').get(id);
   if (!user) return res.status(404).json({ error: 'User not found' });
   try {
-    // Explicitly delete related records first (don't rely on CASCADE pragma)
-    const deleteAll = db.transaction(() => {
-      db.prepare('DELETE FROM message_media WHERE user_id = ?').run(id);
-      db.prepare('DELETE FROM reactions WHERE user_id = ?').run(id);
-      db.prepare('DELETE FROM conversations WHERE user_id = ?').run(id);
-      db.prepare('DELETE FROM users WHERE id = ?').run(id);
-    });
-    deleteAll();
+    db.prepare('DELETE FROM message_media WHERE user_id = ?').run(id);
+    db.prepare('DELETE FROM reactions WHERE user_id = ?').run(id);
+    db.prepare('DELETE FROM conversations WHERE user_id = ?').run(id);
+    db.prepare('DELETE FROM users WHERE id = ?').run(id);
     console.log(`🗑️  Admin deleted user (id=${id})`);
     res.json({ ok: true });
   } catch (err) {
-    console.error('Admin delete error:', err.message);
+    console.error('Admin delete error:', err.message, err.stack);
     res.status(500).json({ error: err.message || 'Failed to delete user' });
   }
 });
