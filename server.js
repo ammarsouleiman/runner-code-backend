@@ -4,6 +4,7 @@ const express = require('express');
 const cors = require('cors');
 const bcrypt = require('bcryptjs');
 const jwt = require('jsonwebtoken');
+const cookieParser = require('cookie-parser');
 const Database = require('better-sqlite3');
 const path = require('path');
 const { Readable } = require('stream');
@@ -85,6 +86,7 @@ app.use(cors({
   },
   credentials: true,
 }));
+app.use(cookieParser());
 app.use(express.json({ limit: '20mb' }));
 
 // ── Google OAuth client ─────────────────────────────────────────────────────
@@ -114,10 +116,34 @@ app.use((req, res, next) => {
 // ── Health check ──────────────────────────────────────────────────────────────
 app.get('/health', (req, res) => res.json({ status: 'ok' }));
 
+// ── Cookie helpers ───────────────────────────────────────────────────────────
+const COOKIE_NAME = 'rc_token';
+const IS_PROD = process.env.NODE_ENV === 'production';
+
+function setAuthCookie(res, token) {
+  res.cookie(COOKIE_NAME, token, {
+    httpOnly: true,
+    secure: IS_PROD,
+    sameSite: IS_PROD ? 'none' : 'lax',
+    maxAge: 30 * 24 * 60 * 60 * 1000, // 30 days
+    path: '/',
+  });
+}
+
+function clearAuthCookie(res) {
+  res.clearCookie(COOKIE_NAME, {
+    httpOnly: true,
+    secure: IS_PROD,
+    sameSite: IS_PROD ? 'none' : 'lax',
+    path: '/',
+  });
+}
+
 // ── JWT Verification Middleware ───────────────────────────────────────────────
 function verifyToken(req, res, next) {
-  const authHeader = req.headers['authorization'];
-  const token = authHeader && authHeader.split(' ')[1];
+  // HttpOnly cookie first (XSS-safe), then Bearer header as fallback
+  const token = req.cookies[COOKIE_NAME] ||
+    (req.headers['authorization']?.split(' ')[1]);
 
   if (!token) {
     return res.status(401).json({ error: 'Access token required' });
@@ -169,8 +195,8 @@ app.post('/api/auth/register', authLimiter, (req, res) => {
 
   console.log(`✅ New user registered: ${name.trim()} (${normalizedEmail})`);
 
+  setAuthCookie(res, token);
   res.status(201).json({
-    token,
     user: {
       id: result.lastInsertRowid,
       name: name.trim(),
@@ -208,8 +234,8 @@ app.post('/api/auth/login', authLimiter, (req, res) => {
 
   console.log(`✅ User logged in: ${user.name} (${user.email})`);
 
+  setAuthCookie(res, token);
   res.json({
-    token,
     user: { id: user.id, name: user.name, email: user.email, country: user.country },
   });
 });
@@ -280,12 +306,13 @@ app.post('/api/auth/complete-profile', authLimiter, (req, res) => {
     { expiresIn: '30d' }
   );
 
-  res.json({ token, user: { id: user.id, name: user.name, email: user.email, country: user.country } });
+  setAuthCookie(res, token);
+  res.json({ user: { id: user.id, name: user.name, email: user.email, country: user.country } });
 });
 
 // ── POST /api/auth/logout ─────────────────────────────────────────────────────
-// Stateless JWT — client simply discards the token
 app.post('/api/auth/logout', (req, res) => {
+  clearAuthCookie(res);
   res.json({ message: 'Logged out successfully' });
 });
 
@@ -350,8 +377,8 @@ app.post('/api/auth/google', authLimiter, async (req, res) => {
       { expiresIn: '30d' }
     );
 
+    setAuthCookie(res, jwtToken);
     res.json({
-      token: jwtToken,
       user: { id: user.id, name: user.name, email: user.email, country: user.country },
     });
   } catch (err) {
