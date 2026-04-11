@@ -66,6 +66,7 @@ db.exec(`
 `);
 
 // ── Migrations ────────────────────────────────────────────────────────────────
+db.pragma('foreign_keys = ON');
 try { db.exec('ALTER TABLE users ADD COLUMN google_id TEXT'); } catch {}
 
 // ── Middleware ────────────────────────────────────────────────────────────────
@@ -151,6 +152,9 @@ function verifyToken(req, res, next) {
 
   try {
     const decoded = jwt.verify(token, JWT_SECRET);
+    // Check user still exists in DB — catches admin-deleted accounts immediately
+    const exists = db.prepare('SELECT id FROM users WHERE id = ?').get(decoded.id);
+    if (!exists) return res.status(401).json({ error: 'Account no longer exists' });
     req.user = decoded;
     next();
   } catch {
@@ -554,9 +558,14 @@ app.delete('/admin/users/:id', (req, res) => {
   if (!id) return res.status(400).json({ error: 'Invalid id' });
   const user = db.prepare('SELECT id FROM users WHERE id = ?').get(id);
   if (!user) return res.status(404).json({ error: 'User not found' });
-  db.prepare('DELETE FROM users WHERE id = ?').run(id);
-  console.log(`🗑️  Admin deleted user (id=${id})`);
-  res.json({ ok: true });
+  try {
+    db.prepare('DELETE FROM users WHERE id = ?').run(id);
+    console.log(`🗑️  Admin deleted user (id=${id})`);
+    res.json({ ok: true });
+  } catch (err) {
+    console.error('Admin delete error:', err.message);
+    res.status(500).json({ error: 'Failed to delete user' });
+  }
 });
 
 // ── GET /api/conversations ──────────────────────────────────────────────────
