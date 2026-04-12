@@ -14,6 +14,7 @@ const { OAuth2Client } = require('google-auth-library');
 require('dotenv').config({ path: path.join(__dirname, '.env') });
 
 const app = express();
+app.set('trust proxy', 1); // Trust Railway's reverse proxy for accurate IP detection
 const PORT = process.env.PORT || 8080;
 
 if (!process.env.JWT_SECRET && process.env.NODE_ENV === 'production') {
