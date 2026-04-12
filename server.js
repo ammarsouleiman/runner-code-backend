@@ -133,7 +133,7 @@ function setAuthCookie(res, token) {
   res.cookie(COOKIE_NAME, token, {
     httpOnly: true,
     secure: IS_PROD,
-    sameSite: IS_PROD ? 'lax' : 'lax',
+    sameSite: IS_PROD ? 'none' : 'lax',
     domain: IS_PROD ? '.runner-code.com' : undefined,
     maxAge: 30 * 24 * 60 * 60 * 1000, // 30 days
     path: '/',
@@ -144,7 +144,7 @@ function clearAuthCookie(res) {
   res.clearCookie(COOKIE_NAME, {
     httpOnly: true,
     secure: IS_PROD,
-    sameSite: IS_PROD ? 'lax' : 'lax',
+    sameSite: IS_PROD ? 'none' : 'lax',
     domain: IS_PROD ? '.runner-code.com' : undefined,
     path: '/',
   });
