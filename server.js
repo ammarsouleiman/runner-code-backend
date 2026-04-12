@@ -78,6 +78,7 @@ try { db.exec('ALTER TABLE users ADD COLUMN google_id TEXT'); } catch {}
 // ── Middleware ────────────────────────────────────────────────────────────────
 const ALLOWED_ORIGINS = [
   'https://platform.runner-code.com',
+  'https://api.runner-code.com',
   'https://runner-code-backend-production.up.railway.app',
   'http://localhost:5173',
   'http://localhost:3000',
@@ -132,7 +133,8 @@ function setAuthCookie(res, token) {
   res.cookie(COOKIE_NAME, token, {
     httpOnly: true,
     secure: IS_PROD,
-    sameSite: IS_PROD ? 'none' : 'lax',
+    sameSite: IS_PROD ? 'lax' : 'lax',
+    domain: IS_PROD ? '.runner-code.com' : undefined,
     maxAge: 30 * 24 * 60 * 60 * 1000, // 30 days
     path: '/',
   });
@@ -142,7 +144,8 @@ function clearAuthCookie(res) {
   res.clearCookie(COOKIE_NAME, {
     httpOnly: true,
     secure: IS_PROD,
-    sameSite: IS_PROD ? 'none' : 'lax',
+    sameSite: IS_PROD ? 'lax' : 'lax',
+    domain: IS_PROD ? '.runner-code.com' : undefined,
     path: '/',
   });
 }
