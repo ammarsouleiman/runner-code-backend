@@ -553,7 +553,10 @@ app.get('/admin/users', (req, res) => {
       </td>
     </tr>`;
   }).join('');
-  const contactRows = contacts.map(c => `
+  const contactRows = contacts.map(c => {
+    const locked = c.status !== 'pending';
+    const btnStyle = (bg) => `display:inline-flex;align-items:center;gap:5px;background:${locked ? '#2a2a2a' : bg};color:${locked ? '#555' : '#fff'};border:none;padding:5px 11px;border-radius:6px;cursor:${locked ? 'not-allowed' : 'pointer'};font-size:11px;${locked ? 'opacity:0.5;' : ''}`;
+    return `
     <tr id="crow-${c.id}">
       <td>${c.id}</td>
       <td><span style="display:inline-flex;align-items:center;gap:6px;">${typeIcon[c.type] || typeIcon.other}${escapeHtml(c.type)}</span></td>
@@ -562,11 +565,15 @@ app.get('/admin/users', (req, res) => {
       <td>${escapeHtml(c.user_name)}<br><small style="color:#888">${escapeHtml(c.user_email)}</small></td>
       <td id="cstatus-${c.id}">${statusBadge[c.status] || statusBadge.pending}</td>
       <td>${escapeHtml(c.created_at || '—')}</td>
-      <td style="white-space:nowrap;display:flex;gap:4px;flex-wrap:wrap;">
-        <button onclick="setStatus(${c.id},'approved')" style="display:inline-flex;align-items:center;gap:5px;background:#22c55e;color:#fff;border:none;padding:5px 11px;border-radius:6px;cursor:pointer;font-size:11px;">${svg(ICONS.check, '#fff', 12)}Approve</button>
-        <button onclick="setStatus(${c.id},'rejected')" style="display:inline-flex;align-items:center;gap:5px;background:#ef4444;color:#fff;border:none;padding:5px 11px;border-radius:6px;cursor:pointer;font-size:11px;">${svg(ICONS.x, '#fff', 12)}Reject</button>
+      <td id="cactions-${c.id}" style="white-space:nowrap;display:flex;gap:4px;flex-wrap:wrap;">
+        ${locked
+          ? `<span style="color:#555;font-size:11px;font-style:italic;padding:5px 2px;">Locked</span>`
+          : `<button onclick="setStatus(${c.id},'approved')" style="${btnStyle('#22c55e')}">${svg(ICONS.check, '#fff', 12)}Approve</button>
+             <button onclick="setStatus(${c.id},'rejected')" style="${btnStyle('#ef4444')}">${svg(ICONS.x, '#fff', 12)}Reject</button>`
+        }
       </td>
-    </tr>`).join('');
+    </tr>`;
+  }).join('');
   res.send(`<!DOCTYPE html>
 <html lang="en">
 <head>
@@ -627,7 +634,7 @@ app.get('/admin/users', (req, res) => {
     }
     function setStatus(id, status) {
       const labels = { approved: 'Approve', rejected: 'Reject' };
-      if (!confirm(labels[status] + ' this message?')) return;
+      if (!confirm(labels[status] + ' this message? This is final and cannot be changed.')) return;
       fetch('/admin/contact/' + id + '/status?key=${key}', {
         method: 'PATCH',
         headers: { 'Content-Type': 'application/json' },
@@ -650,6 +657,9 @@ app.get('/admin/users', (req, res) => {
             };
             const el = document.getElementById('cstatus-' + id);
             if (el) el.innerHTML = badges[status];
+            // Lock action buttons after decision — final, no takebacks
+            const act = document.getElementById('cactions-' + id);
+            if (act) act.innerHTML = '<span style="color:#555;font-size:11px;font-style:italic;padding:5px 2px;">Locked</span>';
           } else { showToast((d.error || 'Failed'), false); }
         })
         .catch(() => showToast('Network error', false));
@@ -734,10 +744,15 @@ app.patch('/admin/contact/:id/status', (req, res) => {
   const id = parseInt(req.params.id, 10);
   const { status } = req.body;
   if (!id) return res.status(400).json({ error: 'Invalid id' });
-  if (!['pending', 'approved', 'rejected'].includes(status)) return res.status(400).json({ error: 'Invalid status' });
+  if (!['approved', 'rejected'].includes(status)) return res.status(400).json({ error: 'Invalid status' });
   try {
-    const info = db.prepare('UPDATE contact_messages SET status = ? WHERE id = ?').run(status, id);
-    if (info.changes === 0) return res.status(404).json({ error: 'Message not found' });
+    // Only allow transition from 'pending' — final decisions are locked
+    const current = db.prepare('SELECT status FROM contact_messages WHERE id = ?').get(id);
+    if (!current) return res.status(404).json({ error: 'Message not found' });
+    if (current.status !== 'pending') {
+      return res.status(409).json({ error: `Already ${current.status} — decision is final` });
+    }
+    db.prepare('UPDATE contact_messages SET status = ? WHERE id = ?').run(status, id);
     res.json({ ok: true, status });
   } catch (err) {
     res.status(500).json({ error: err.message || 'Failed to update' });
