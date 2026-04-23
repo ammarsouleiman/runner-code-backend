@@ -477,8 +477,10 @@ app.get('/api/images', verifyToken, async (req, res) => {
   }
 });
 
-// ── GET /admin/users ──────────────────────────────────────────────────────────
-// Protected with ADMIN_KEY env variable — returns all users as HTML table
+// ── Admin authentication ──────────────────────────────────────────────────────
+// Protected with ADMIN_KEY env variable. Login via POST /admin/login sets an
+// httpOnly cookie 'admin_session'. All admin endpoints require either that
+// cookie OR a ?key=... query param (legacy).
 function escapeHtml(str) {
   return String(str)
     .replace(/&/g, '&amp;')
@@ -488,20 +490,23 @@ function escapeHtml(str) {
     .replace(/'/g, '&#039;');
 }
 
-app.get('/admin/users', (req, res) => {
+const ADMIN_COOKIE = 'admin_session';
+function isAdminAuthed(req) {
   const adminKey = process.env.ADMIN_KEY;
-  if (!adminKey || req.query.key !== adminKey) {
-    return res.status(401).send('Unauthorized');
-  }
-  const users = db.prepare('SELECT id, name, email, country, password_hash, google_id, created_at FROM users ORDER BY created_at DESC').all();
-  const contacts = db.prepare('SELECT id, type, subject, message, user_name, user_email, status, created_at FROM contact_messages ORDER BY created_at DESC').all();
-  const key = encodeURIComponent(req.query.key);
+  if (!adminKey) return false;
+  return req.cookies[ADMIN_COOKIE] === adminKey || req.query.key === adminKey;
+}
+function requireAdmin(req, res, next) {
+  if (!isAdminAuthed(req)) return res.status(401).json({ error: 'Unauthorized' });
+  next();
+}
 
-  // Inline Lucide SVG icons (no emojis)
+// Shared inline SVG icons (Lucide-like)
+function adminIcons() {
   const svg = (path, color = 'currentColor', size = 14) =>
-    `<svg xmlns="http://www.w3.org/2000/svg" width="${size}" height="${size}" viewBox="0 0 24 24" fill="none" stroke="${color}" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="vertical-align:middle;">${path}</svg>`;
+    `<svg xmlns="http://www.w3.org/2000/svg" width="${size}" height="${size}" viewBox="0 0 24 24" fill="none" stroke="${color}" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="vertical-align:middle;flex-shrink:0;">${path}</svg>`;
   const ICONS = {
-    bug:        '<path d="m8 2 1.88 1.88"/><path d="M14.12 3.88 16 2"/><path d="M9 7.13v-1a3.003 3.003 0 1 1 6 0v1"/><path d="M12 20c-3.3 0-6-2.7-6-6v-3a4 4 0 0 1 4-4h4a4 4 0 0 1 4 4v3c0 3.3-2.7 6-6 6"/><path d="M12 20v-9"/><path d="M6.53 9C4.6 8.8 3 7.1 3 5"/><path d="M6 13H2"/><path d="M3 21c0-2.1 1.7-3.9 3.8-4"/><path d="M20.97 5c0 2.1-1.6 3.8-3.5 4"/><path d="M22 13h-4"/><path d="M17.2 17c2.1.1 3.8 1.9 3.8 4"/>',
+    bug:        '<path d="m8 2 1.88 1.88"/><path d="M14.12 3.88 16 2"/><path d="M9 7.13v-1a3.003 3.003 0 1 1 6 0v1"/><path d="M12 20c-3.3 0-6-2.7-6-6v-3a4 4 0 0 1 4-4h4a4 4 0 0 1 4 4v3c0 3.3-2.7 6-6 6"/><path d="M12 20v-9"/>',
     lightbulb:  '<path d="M15 14c.2-1 .7-1.7 1.5-2.5 1-.9 1.5-2.2 1.5-3.5A6 6 0 0 0 6 8c0 1 .2 2.2 1.5 3.5.7.7 1.3 1.5 1.5 2.5"/><path d="M9 18h6"/><path d="M10 22h4"/>',
     wrench:     '<path d="M14.7 6.3a1 1 0 0 0 0 1.4l1.6 1.6a1 1 0 0 0 1.4 0l3.77-3.77a6 6 0 0 1-7.94 7.94l-6.91 6.91a2.12 2.12 0 0 1-3-3l6.91-6.91a6 6 0 0 1 7.94-7.94l-3.76 3.76z"/>',
     message:    '<path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/>',
@@ -510,163 +515,511 @@ app.get('/admin/users', (req, res) => {
     x:          '<path d="M18 6 6 18"/><path d="m6 6 12 12"/>',
     users:      '<path d="M16 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M22 21v-2a4 4 0 0 0-3-3.87"/><path d="M16 3.13a4 4 0 0 1 0 7.75"/>',
     inbox:      '<polyline points="22 12 16 12 14 15 10 15 8 12 2 12"/><path d="M5.45 5.11 2 12v6a2 2 0 0 0 2 2h16a2 2 0 0 0 2-2v-6l-3.45-6.89A2 2 0 0 0 16.76 4H7.24a2 2 0 0 0-1.79 1.11z"/>',
-    google:     '<circle cx="12" cy="12" r="10"/><circle cx="12" cy="12" r="4"/><line x1="21.17" y1="8" x2="12" y2="8"/><line x1="3.95" y1="6.06" x2="8.54" y2="14"/><line x1="10.88" y1="21.94" x2="15.46" y2="14"/>',
+    google:     '<path d="M22 12c0-5.5-4.5-10-10-10S2 6.5 2 12s4.5 10 10 10c3 0 5.7-1.3 7.5-3.5"/><path d="M12 12h10"/>',
     key:        '<circle cx="7.5" cy="15.5" r="5.5"/><path d="m21 2-9.6 9.6"/><path d="m15.5 7.5 3 3L22 7l-3-3"/>',
     alert:      '<path d="m21.73 18-8-14a2 2 0 0 0-3.48 0l-8 14A2 2 0 0 0 4 21h16a2 2 0 0 0 1.73-3Z"/><path d="M12 9v4"/><path d="M12 17h.01"/>',
     trash:      '<path d="M3 6h18"/><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6"/><path d="M8 6V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/>',
+    logout:     '<path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4"/><polyline points="16 17 21 12 16 7"/><line x1="21" y1="12" x2="9" y2="12"/>',
+    dashboard:  '<rect x="3" y="3" width="7" height="9"/><rect x="14" y="3" width="7" height="5"/><rect x="14" y="12" width="7" height="9"/><rect x="3" y="16" width="7" height="5"/>',
+    mail:       '<rect x="2" y="4" width="20" height="16" rx="2"/><path d="m22 7-10 5L2 7"/>',
+    search:     '<circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/>',
+    user:       '<path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2"/><circle cx="12" cy="7" r="4"/>',
+    calendar:   '<rect x="3" y="4" width="18" height="18" rx="2" ry="2"/><line x1="16" y1="2" x2="16" y2="6"/><line x1="8" y1="2" x2="8" y2="6"/><line x1="3" y1="10" x2="21" y2="10"/>',
+    globe:      '<circle cx="12" cy="12" r="10"/><line x1="2" y1="12" x2="22" y2="12"/><path d="M12 2a15.3 15.3 0 0 1 4 10 15.3 15.3 0 0 1-4 10 15.3 15.3 0 0 1-4-10 15.3 15.3 0 0 1 4-10z"/>',
+    shield:     '<path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/>',
   };
+  return { svg, ICONS };
+}
+
+// ── GET /admin ────────────────────────────────────────────────────────────────
+// Login page (or redirect to /admin/dashboard if already logged in)
+app.get('/admin', (req, res) => {
+  if (isAdminAuthed(req)) return res.redirect('/admin/dashboard');
+  const { svg, ICONS } = adminIcons();
+  res.send(`<!DOCTYPE html>
+<html lang="en"><head><meta charset="UTF-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Admin · Runner Code</title>
+<style>
+  *{box-sizing:border-box;margin:0;padding:0}
+  body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,sans-serif;background:radial-gradient(ellipse at top,#1a0a0b 0%,#0a0a0a 50%);color:#eee;min-height:100vh;display:flex;align-items:center;justify-content:center;padding:24px}
+  .card{width:100%;max-width:420px;background:#131313;border:1px solid #262626;border-radius:24px;padding:40px 32px;box-shadow:0 20px 60px rgba(0,0,0,.5),0 0 0 1px rgba(227,30,36,.08)}
+  .logo{width:64px;height:64px;border-radius:20px;background:linear-gradient(135deg,#E31E24,#8b1217);display:flex;align-items:center;justify-content:center;margin:0 auto 24px;box-shadow:0 10px 30px rgba(227,30,36,.3)}
+  h1{font-size:22px;font-weight:800;text-align:center;margin-bottom:6px;letter-spacing:-.3px}
+  .sub{color:#888;text-align:center;font-size:13px;margin-bottom:32px}
+  label{display:block;font-size:11px;font-weight:700;color:#888;text-transform:uppercase;letter-spacing:1.5px;margin-bottom:8px}
+  .input-wrap{position:relative;margin-bottom:20px}
+  .input-icon{position:absolute;left:14px;top:50%;transform:translateY(-50%);color:#666}
+  input{width:100%;padding:14px 14px 14px 44px;background:#1a1a1a;border:1px solid #2a2a2a;border-radius:12px;color:#eee;font-size:14px;outline:none;transition:all .2s;font-family:inherit}
+  input:focus{border-color:#E31E24;box-shadow:0 0 0 3px rgba(227,30,36,.12)}
+  button{width:100%;padding:14px;background:linear-gradient(135deg,#E31E24,#b3161b);color:#fff;border:none;border-radius:12px;font-size:14px;font-weight:700;cursor:pointer;transition:all .2s;letter-spacing:.3px;display:flex;align-items:center;justify-content:center;gap:8px}
+  button:hover{transform:translateY(-1px);box-shadow:0 8px 20px rgba(227,30,36,.3)}
+  button:active{transform:translateY(0)}
+  button:disabled{opacity:.6;cursor:not-allowed;transform:none}
+  .err{display:none;margin-top:16px;padding:12px;background:#ef444418;border:1px solid #ef444440;border-radius:10px;color:#ef4444;font-size:13px;text-align:center}
+  .err.show{display:block}
+  .footer{text-align:center;color:#555;font-size:11px;margin-top:28px}
+</style></head><body>
+  <form class="card" onsubmit="return login(event)">
+    <div class="logo">${svg(ICONS.shield, '#fff', 32)}</div>
+    <h1>Admin Access</h1>
+    <p class="sub">Enter your admin key to continue</p>
+    <label>Admin Key</label>
+    <div class="input-wrap">
+      <span class="input-icon">${svg(ICONS.key, '#666', 18)}</span>
+      <input id="key" type="password" placeholder="Enter your admin key" autofocus autocomplete="current-password" required>
+    </div>
+    <button type="submit" id="btn">${svg(ICONS.shield, '#fff', 16)}<span>Sign In</span></button>
+    <div class="err" id="err"></div>
+    <div class="footer">Runner Code · Admin Panel</div>
+  </form>
+<script>
+async function login(e){
+  e.preventDefault();
+  const btn=document.getElementById('btn');const err=document.getElementById('err');
+  const key=document.getElementById('key').value.trim();
+  if(!key)return;
+  btn.disabled=true;btn.querySelector('span').textContent='Signing in…';err.classList.remove('show');
+  try{
+    const r=await fetch('/admin/login',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({key})});
+    const d=await r.json();
+    if(r.ok&&d.ok){location.href='/admin/dashboard';}
+    else{err.textContent=d.error||'Invalid key';err.classList.add('show');btn.disabled=false;btn.querySelector('span').textContent='Sign In';}
+  }catch{err.textContent='Network error';err.classList.add('show');btn.disabled=false;btn.querySelector('span').textContent='Sign In';}
+  return false;
+}
+</script></body></html>`);
+});
+
+// ── POST /admin/login ─────────────────────────────────────────────────────────
+app.post('/admin/login', (req, res) => {
+  const adminKey = process.env.ADMIN_KEY;
+  if (!adminKey) return res.status(500).json({ error: 'Admin key not configured' });
+  if (req.body?.key !== adminKey) return res.status(401).json({ error: 'Invalid admin key' });
+  res.cookie(ADMIN_COOKIE, adminKey, {
+    httpOnly: true,
+    secure: process.env.NODE_ENV === 'production',
+    sameSite: 'lax',
+    maxAge: 12 * 60 * 60 * 1000, // 12h
+  });
+  res.json({ ok: true });
+});
+
+// ── POST /admin/logout ────────────────────────────────────────────────────────
+app.post('/admin/logout', (req, res) => {
+  res.clearCookie(ADMIN_COOKIE);
+  res.json({ ok: true });
+});
+
+// ── GET /admin/users ──────────────────────────────────────────────────────────
+// Legacy: redirect old ?key=... URL to the new dashboard
+app.get('/admin/users', (req, res) => {
+  if (!isAdminAuthed(req)) return res.redirect('/admin');
+  res.redirect('/admin/dashboard');
+});
+
+// ── GET /admin/dashboard ──────────────────────────────────────────────────────
+app.get('/admin/dashboard', (req, res) => {
+  if (!isAdminAuthed(req)) return res.redirect('/admin');
+  const users = db.prepare('SELECT id, name, email, country, password_hash, google_id, created_at FROM users ORDER BY created_at DESC').all();
+  const contacts = db.prepare('SELECT id, type, subject, message, user_name, user_email, user_id, status, created_at FROM contact_messages ORDER BY created_at DESC').all();
+  const { svg, ICONS } = adminIcons();
+
+  // Stats
+  const pendingCount = contacts.filter(c => c.status === 'pending').length;
+  const approvedCount = contacts.filter(c => c.status === 'approved').length;
+  const rejectedCount = contacts.filter(c => c.status === 'rejected').length;
+  const googleUsers = users.filter(u => u.google_id).length;
+
+  // Helpers
   const typeIcon = {
     bug:        svg(ICONS.bug,       '#ef4444'),
     suggestion: svg(ICONS.lightbulb, '#eab308'),
     request:    svg(ICONS.wrench,    '#3b82f6'),
-    other:      svg(ICONS.message,   '#888'),
+    other:      svg(ICONS.message,   '#94a3b8'),
   };
-  const pill = (bg, color, iconSvg, label) =>
-    `<span style="display:inline-flex;align-items:center;gap:5px;background:${bg};color:${color};border:1px solid ${color}44;padding:3px 9px;border-radius:20px;font-size:11px;font-weight:600;">${iconSvg}${label}</span>`;
-  const statusBadge = {
-    pending:  pill('#f59e0b22', '#f59e0b', svg(ICONS.clock, '#f59e0b', 12), 'Pending'),
-    approved: pill('#22c55e22', '#22c55e', svg(ICONS.check, '#22c55e', 12), 'Approved'),
-    rejected: pill('#ef444422', '#ef4444', svg(ICONS.x,     '#ef4444', 12), 'Rejected'),
+  const typeColorDot = { bug: '#ef4444', suggestion: '#eab308', request: '#3b82f6', other: '#94a3b8' };
+  const statusPill = (status) => {
+    const map = {
+      pending:  { bg: '#f59e0b22', c: '#f59e0b', ic: svg(ICONS.clock, '#f59e0b', 11), lbl: 'Pending' },
+      approved: { bg: '#22c55e22', c: '#22c55e', ic: svg(ICONS.check, '#22c55e', 11), lbl: 'Approved' },
+      rejected: { bg: '#ef444422', c: '#ef4444', ic: svg(ICONS.x,     '#ef4444', 11), lbl: 'Rejected' },
+    }[status] || { bg: '#2a2a2a', c: '#888', ic: '', lbl: status };
+    return `<span class="pill" style="background:${map.bg};color:${map.c};border:1px solid ${map.c}44;">${map.ic}${map.lbl}</span>`;
   };
+
+  // Group messages by user (using user_id, fallback to email)
+  const userMap = new Map(users.map(u => [u.id, u]));
+  const emailMap = new Map(users.map(u => [u.email.toLowerCase(), u]));
+  const groupedByUser = new Map();  // key -> { user, messages[] }
+  for (const c of contacts) {
+    const u = (c.user_id && userMap.get(c.user_id)) || emailMap.get((c.user_email || '').toLowerCase()) || null;
+    const key = u ? `uid-${u.id}` : `email-${(c.user_email || 'unknown').toLowerCase()}`;
+    if (!groupedByUser.has(key)) {
+      groupedByUser.set(key, {
+        user: u,
+        fallbackName: c.user_name,
+        fallbackEmail: c.user_email,
+        messages: [],
+      });
+    }
+    groupedByUser.get(key).messages.push(c);
+  }
+  // Sort: most recent activity first
+  const userGroups = [...groupedByUser.values()].sort((a, b) => {
+    const ta = Math.max(...a.messages.map(m => new Date(m.created_at).getTime() || 0));
+    const tb = Math.max(...b.messages.map(m => new Date(m.created_at).getTime() || 0));
+    return tb - ta;
+  });
+
+  // Build user cards
+  const userCards = userGroups.map(g => {
+    const name = g.user ? g.user.name : g.fallbackName;
+    const email = g.user ? g.user.email : g.fallbackEmail;
+    const country = g.user?.country || null;
+    const initials = String(name || '?').trim().split(/\s+/).map(p => p[0]).slice(0, 2).join('').toUpperCase() || '?';
+    const pending = g.messages.filter(m => m.status === 'pending').length;
+    const approved = g.messages.filter(m => m.status === 'approved').length;
+    const rejected = g.messages.filter(m => m.status === 'rejected').length;
+    const groupId = g.user ? `u${g.user.id}` : `e${encodeURIComponent(email)}`;
+
+    const msgItems = g.messages.map(c => {
+      const locked = c.status !== 'pending';
+      return `
+      <div class="msg-item" id="crow-${c.id}">
+        <div class="msg-top">
+          <span class="type-dot" style="background:${typeColorDot[c.type] || '#94a3b8'}"></span>
+          <span class="type-label">${typeIcon[c.type] || typeIcon.other}${escapeHtml(c.type)}</span>
+          <span class="msg-date">${escapeHtml(c.created_at || '')}</span>
+          <span id="cstatus-${c.id}" class="msg-status">${statusPill(c.status)}</span>
+        </div>
+        <div class="msg-subject">${escapeHtml(c.subject)}</div>
+        <div class="msg-body">${escapeHtml(c.message)}</div>
+        <div class="msg-actions" id="cactions-${c.id}">
+          ${locked
+            ? `<span class="locked">${svg(ICONS.shield, '#555', 12)} Decision locked</span>`
+            : `<button class="btn btn-approve" onclick="setStatus(${c.id},'approved')">${svg(ICONS.check, '#fff', 13)}Approve</button>
+               <button class="btn btn-reject" onclick="setStatus(${c.id},'rejected')">${svg(ICONS.x, '#fff', 13)}Reject</button>`
+          }
+        </div>
+      </div>`;
+    }).join('');
+
+    return `
+    <div class="user-card" data-search="${escapeHtml((name + ' ' + email).toLowerCase())}">
+      <div class="user-header" onclick="toggleUser('${groupId}')">
+        <div class="avatar">${escapeHtml(initials)}</div>
+        <div class="user-meta">
+          <div class="user-name">${escapeHtml(name || 'Unknown')}${g.user ? '' : ' <span class="orphan">· deleted account</span>'}</div>
+          <div class="user-email">${escapeHtml(email || '—')}${country ? ` · ${escapeHtml(country)}` : ''}</div>
+        </div>
+        <div class="user-counts">
+          ${pending  ? `<span class="count count-pending">${svg(ICONS.clock, '#f59e0b', 11)}${pending}</span>` : ''}
+          ${approved ? `<span class="count count-approved">${svg(ICONS.check, '#22c55e', 11)}${approved}</span>` : ''}
+          ${rejected ? `<span class="count count-rejected">${svg(ICONS.x,     '#ef4444', 11)}${rejected}</span>` : ''}
+          <span class="total">${g.messages.length} ${g.messages.length === 1 ? 'message' : 'messages'}</span>
+        </div>
+        <span class="chevron" id="chev-${groupId}">▾</span>
+      </div>
+      <div class="user-body" id="body-${groupId}">${msgItems}</div>
+    </div>`;
+  }).join('');
+
+  // User list (all users)
   const userRows = users.map(u => {
     const hasRealPassword = u.password_hash && u.password_hash !== 'GOOGLE_AUTH' && u.password_hash.startsWith('$2');
-    let authType;
-    const iconG = svg(ICONS.google, '#4285F4', 12);
-    const iconK = svg(ICONS.key,    '#eab308', 12);
-    const iconA = svg(ICONS.alert,  '#f59e0b', 12);
-    if (u.google_id && hasRealPassword) authType = `<span style="display:inline-flex;align-items:center;gap:4px;">${iconG} Google + ${iconK} Password</span>`;
-    else if (u.google_id)              authType = `<span style="display:inline-flex;align-items:center;gap:4px;">${iconG} Google only</span>`;
-    else if (hasRealPassword)          authType = `<span style="display:inline-flex;align-items:center;gap:4px;">${iconK} Password</span>`;
-    else                               authType = `<span style="display:inline-flex;align-items:center;gap:4px;">${iconA} No auth</span>`;
+    let authBadge;
+    if (u.google_id && hasRealPassword) authBadge = `<span class="auth-pill auth-dual">${svg(ICONS.google, '#4285F4', 11)}+${svg(ICONS.key, '#eab308', 11)}</span>`;
+    else if (u.google_id)              authBadge = `<span class="auth-pill auth-google">${svg(ICONS.google, '#4285F4', 11)}Google</span>`;
+    else if (hasRealPassword)          authBadge = `<span class="auth-pill auth-pw">${svg(ICONS.key, '#eab308', 11)}Password</span>`;
+    else                               authBadge = `<span class="auth-pill auth-none">${svg(ICONS.alert, '#f59e0b', 11)}None</span>`;
+    const initials = String(u.name || '?').trim().split(/\s+/).map(p => p[0]).slice(0, 2).join('').toUpperCase() || '?';
     return `
-    <tr>
-      <td>${u.id}</td>
-      <td>${escapeHtml(u.name)}</td>
-      <td>${escapeHtml(u.email)}</td>
-      <td>${escapeHtml(u.country || '—')}</td>
-      <td>${authType}</td>
-      <td>${escapeHtml(u.created_at || '—')}</td>
-      <td>
-        <button onclick="deleteUser(${u.id}, '${escapeHtml(u.name)}')" 
-          style="display:inline-flex;align-items:center;gap:5px;background:#E31E24;color:#fff;border:none;padding:5px 11px;border-radius:6px;cursor:pointer;font-size:12px;"
-        >${svg(ICONS.trash, '#fff', 12)}Delete</button>
-      </td>
-    </tr>`;
+    <div class="user-row" data-search="${escapeHtml((u.name + ' ' + u.email).toLowerCase())}">
+      <div class="avatar avatar-sm">${escapeHtml(initials)}</div>
+      <div class="urow-meta">
+        <div class="urow-name">${escapeHtml(u.name)}</div>
+        <div class="urow-email">${escapeHtml(u.email)}</div>
+      </div>
+      <div class="urow-info">
+        <span class="info-item">${svg(ICONS.globe, '#666', 12)}${escapeHtml(u.country || '—')}</span>
+        <span class="info-item">${svg(ICONS.calendar, '#666', 12)}${escapeHtml(u.created_at || '—')}</span>
+        ${authBadge}
+      </div>
+      <button class="btn-icon btn-danger" onclick="deleteUser(${u.id}, '${escapeHtml(u.name).replace(/'/g,"\\'")}')" title="Delete user">
+        ${svg(ICONS.trash, '#ef4444', 15)}
+      </button>
+    </div>`;
   }).join('');
-  const contactRows = contacts.map(c => {
-    const locked = c.status !== 'pending';
-    const btnStyle = (bg) => `display:inline-flex;align-items:center;gap:5px;background:${locked ? '#2a2a2a' : bg};color:${locked ? '#555' : '#fff'};border:none;padding:5px 11px;border-radius:6px;cursor:${locked ? 'not-allowed' : 'pointer'};font-size:11px;${locked ? 'opacity:0.5;' : ''}`;
-    return `
-    <tr id="crow-${c.id}">
-      <td>${c.id}</td>
-      <td><span style="display:inline-flex;align-items:center;gap:6px;">${typeIcon[c.type] || typeIcon.other}${escapeHtml(c.type)}</span></td>
-      <td><strong>${escapeHtml(c.subject)}</strong></td>
-      <td style="max-width:300px;white-space:pre-wrap;word-break:break-word;">${escapeHtml(c.message)}</td>
-      <td>${escapeHtml(c.user_name)}<br><small style="color:#888">${escapeHtml(c.user_email)}</small></td>
-      <td id="cstatus-${c.id}">${statusBadge[c.status] || statusBadge.pending}</td>
-      <td>${escapeHtml(c.created_at || '—')}</td>
-      <td id="cactions-${c.id}" style="white-space:nowrap;display:flex;gap:4px;flex-wrap:wrap;">
-        ${locked
-          ? `<span style="color:#555;font-size:11px;font-style:italic;padding:5px 2px;">Locked</span>`
-          : `<button onclick="setStatus(${c.id},'approved')" style="${btnStyle('#22c55e')}">${svg(ICONS.check, '#fff', 12)}Approve</button>
-             <button onclick="setStatus(${c.id},'rejected')" style="${btnStyle('#ef4444')}">${svg(ICONS.x, '#fff', 12)}Reject</button>`
-        }
-      </td>
-    </tr>`;
-  }).join('');
+
   res.send(`<!DOCTYPE html>
-<html lang="en">
-<head>
-  <meta charset="UTF-8">
-  <title>Runner Code — Admin</title>
-  <style>
-    body { font-family: sans-serif; background: #0f0f0f; color: #eee; padding: 32px; }
-    h1 { color: #E31E24; margin-bottom: 4px; }
-    h2 { color: #E31E24; margin: 40px 0 8px; font-size: 18px; }
-    p  { color: #888; margin-bottom: 24px; }
-    table { width: 100%; border-collapse: collapse; margin-bottom: 8px; }
-    th { background: #1a1a1a; color: #E31E24; padding: 10px 14px; text-align: left; font-size: 13px; }
-    td { padding: 10px 14px; border-bottom: 1px solid #222; font-size: 13px; vertical-align: top; }
-    tr:hover td { background: #1a1a1a; }
-    .toast { position:fixed; bottom:24px; right:24px; background:#1a1a1a; border:1px solid #333; color:#eee; padding:12px 20px; border-radius:10px; font-size:14px; display:none; }
-    .section-label { color:#888; font-size:13px; margin-bottom:20px; }
-  </style>
-</head>
-<body>
-  <h1>Runner Code — Admin</h1>
+<html lang="en"><head><meta charset="UTF-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Admin Dashboard · Runner Code</title>
+<style>
+  *{box-sizing:border-box;margin:0;padding:0}
+  :root{--bg:#0a0a0a;--card:#141414;--card2:#1a1a1a;--border:#262626;--border-soft:#1f1f1f;--text:#e5e5e5;--muted:#888;--muted2:#555;--primary:#E31E24;--radius:16px}
+  body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,sans-serif;background:var(--bg);color:var(--text);min-height:100vh;font-size:14px;line-height:1.5}
+  .layout{display:grid;grid-template-columns:260px 1fr;min-height:100vh}
+  /* Sidebar */
+  .sidebar{background:#0d0d0d;border-right:1px solid var(--border);padding:24px 16px;display:flex;flex-direction:column;position:sticky;top:0;height:100vh}
+  .brand{display:flex;align-items:center;gap:10px;padding:8px 12px 24px;border-bottom:1px solid var(--border-soft);margin-bottom:20px}
+  .brand-logo{width:36px;height:36px;border-radius:10px;background:linear-gradient(135deg,var(--primary),#8b1217);display:flex;align-items:center;justify-content:center}
+  .brand-title{font-weight:800;font-size:14px;letter-spacing:-.2px}
+  .brand-sub{font-size:10px;color:var(--muted);text-transform:uppercase;letter-spacing:2px;margin-top:2px}
+  .nav{display:flex;flex-direction:column;gap:4px;flex:1}
+  .nav-item{display:flex;align-items:center;gap:12px;padding:11px 12px;border-radius:10px;color:var(--muted);cursor:pointer;font-weight:600;font-size:13px;transition:all .15s;border:none;background:transparent;width:100%;text-align:left;font-family:inherit}
+  .nav-item:hover{background:#1a1a1a;color:var(--text)}
+  .nav-item.active{background:rgba(227,30,36,.1);color:var(--primary)}
+  .nav-badge{margin-left:auto;background:#262626;color:var(--muted);padding:2px 8px;border-radius:10px;font-size:10px;font-weight:700}
+  .nav-item.active .nav-badge{background:rgba(227,30,36,.2);color:var(--primary)}
+  .logout-btn{display:flex;align-items:center;gap:10px;padding:11px 12px;border-radius:10px;color:var(--muted);cursor:pointer;font-weight:600;font-size:13px;border:1px solid var(--border);background:transparent;font-family:inherit;transition:all .15s}
+  .logout-btn:hover{background:#ef444418;border-color:#ef444440;color:#ef4444}
+  /* Main */
+  .main{padding:32px 40px;max-width:1400px}
+  .page-header{display:flex;align-items:center;justify-content:space-between;margin-bottom:28px;gap:20px}
+  .page-title{font-size:24px;font-weight:800;letter-spacing:-.5px}
+  .page-sub{color:var(--muted);font-size:13px;margin-top:3px}
+  .search-wrap{position:relative;width:280px}
+  .search-icon{position:absolute;left:12px;top:50%;transform:translateY(-50%);color:var(--muted2)}
+  .search-input{width:100%;padding:10px 12px 10px 38px;background:var(--card);border:1px solid var(--border);border-radius:10px;color:var(--text);font-size:13px;outline:none;font-family:inherit;transition:all .15s}
+  .search-input:focus{border-color:var(--primary);background:var(--card2)}
+  /* Stats */
+  .stats{display:grid;grid-template-columns:repeat(auto-fill,minmax(200px,1fr));gap:14px;margin-bottom:28px}
+  .stat{background:var(--card);border:1px solid var(--border);border-radius:var(--radius);padding:20px}
+  .stat-label{font-size:11px;color:var(--muted);text-transform:uppercase;letter-spacing:1.5px;font-weight:700;margin-bottom:8px;display:flex;align-items:center;gap:8px}
+  .stat-value{font-size:28px;font-weight:800;letter-spacing:-.8px}
+  .stat-foot{font-size:11px;color:var(--muted2);margin-top:4px}
+  .stat.s-pending .stat-value{color:#f59e0b}
+  .stat.s-approved .stat-value{color:#22c55e}
+  .stat.s-rejected .stat-value{color:#ef4444}
+  .stat.s-users .stat-value{color:var(--primary)}
+  /* Sections */
+  .section{display:none}
+  .section.active{display:block;animation:fadeIn .25s ease}
+  @keyframes fadeIn{from{opacity:0;transform:translateY(4px)}to{opacity:1;transform:none}}
+  /* User card (messages grouped) */
+  .user-card{background:var(--card);border:1px solid var(--border);border-radius:var(--radius);margin-bottom:12px;overflow:hidden;transition:border-color .15s}
+  .user-card:hover{border-color:#333}
+  .user-header{display:flex;align-items:center;gap:14px;padding:16px 20px;cursor:pointer;user-select:none}
+  .user-header:hover{background:rgba(255,255,255,.02)}
+  .avatar{width:42px;height:42px;border-radius:50%;background:linear-gradient(135deg,var(--primary),#8b1217);color:#fff;display:flex;align-items:center;justify-content:center;font-weight:800;font-size:14px;letter-spacing:.5px;flex-shrink:0}
+  .avatar-sm{width:36px;height:36px;font-size:12px}
+  .user-meta{flex:1;min-width:0}
+  .user-name{font-weight:700;font-size:14px}
+  .user-name .orphan{color:var(--muted2);font-weight:400;font-size:11px;font-style:italic}
+  .user-email{color:var(--muted);font-size:12px;margin-top:2px}
+  .user-counts{display:flex;gap:8px;align-items:center;flex-wrap:wrap}
+  .count{display:inline-flex;align-items:center;gap:4px;font-size:11px;font-weight:700;padding:3px 8px;border-radius:10px}
+  .count-pending{background:#f59e0b22;color:#f59e0b}
+  .count-approved{background:#22c55e22;color:#22c55e}
+  .count-rejected{background:#ef444422;color:#ef4444}
+  .total{color:var(--muted);font-size:11px;font-weight:600}
+  .chevron{color:var(--muted2);font-size:14px;transition:transform .2s;margin-left:4px}
+  .user-card.open .chevron{transform:rotate(180deg)}
+  .user-body{display:none;padding:4px 20px 20px;border-top:1px solid var(--border-soft)}
+  .user-card.open .user-body{display:block}
+  /* Message item */
+  .msg-item{background:#0f0f0f;border:1px solid var(--border-soft);border-radius:12px;padding:14px 16px;margin-top:12px}
+  .msg-top{display:flex;align-items:center;gap:10px;font-size:11px;color:var(--muted);margin-bottom:8px;flex-wrap:wrap}
+  .type-dot{width:6px;height:6px;border-radius:50%}
+  .type-label{display:inline-flex;align-items:center;gap:5px;font-weight:700;text-transform:capitalize;color:var(--text);font-size:11px}
+  .msg-date{margin-left:auto;color:var(--muted2);font-size:11px}
+  .msg-subject{font-weight:700;font-size:14px;margin-bottom:6px;color:var(--text)}
+  .msg-body{color:#bbb;font-size:13px;white-space:pre-wrap;word-break:break-word;line-height:1.55;padding:10px 12px;background:#0a0a0a;border-radius:8px;border:1px solid var(--border-soft);margin-bottom:10px}
+  .msg-actions{display:flex;gap:8px;align-items:center}
+  .pill{display:inline-flex;align-items:center;gap:4px;padding:3px 8px;border-radius:12px;font-size:10px;font-weight:700;text-transform:uppercase;letter-spacing:.5px}
+  .btn{display:inline-flex;align-items:center;gap:6px;padding:7px 14px;border:none;border-radius:8px;font-size:12px;font-weight:700;cursor:pointer;transition:all .15s;font-family:inherit}
+  .btn-approve{background:#22c55e;color:#fff}
+  .btn-approve:hover{background:#16a34a}
+  .btn-reject{background:#ef4444;color:#fff}
+  .btn-reject:hover{background:#dc2626}
+  .locked{display:inline-flex;align-items:center;gap:6px;color:var(--muted2);font-size:11px;font-style:italic;padding:7px 2px}
+  /* User row (Users tab) */
+  .user-row{display:flex;align-items:center;gap:14px;padding:14px 18px;background:var(--card);border:1px solid var(--border);border-radius:12px;margin-bottom:8px;transition:all .15s}
+  .user-row:hover{border-color:#333;background:var(--card2)}
+  .urow-meta{flex:1;min-width:0}
+  .urow-name{font-weight:700;font-size:13px}
+  .urow-email{color:var(--muted);font-size:12px;margin-top:2px}
+  .urow-info{display:flex;gap:12px;align-items:center;flex-wrap:wrap}
+  .info-item{display:inline-flex;align-items:center;gap:5px;color:var(--muted);font-size:11px}
+  .auth-pill{display:inline-flex;align-items:center;gap:4px;padding:3px 8px;border-radius:10px;font-size:10px;font-weight:700;border:1px solid}
+  .auth-google{background:#4285F418;color:#4285F4;border-color:#4285F440}
+  .auth-pw{background:#eab30818;color:#eab308;border-color:#eab30840}
+  .auth-dual{background:#22c55e18;color:#22c55e;border-color:#22c55e40}
+  .auth-none{background:#f59e0b18;color:#f59e0b;border-color:#f59e0b40}
+  .btn-icon{width:34px;height:34px;border-radius:8px;border:1px solid var(--border);background:transparent;cursor:pointer;display:flex;align-items:center;justify-content:center;transition:all .15s}
+  .btn-icon:hover{background:var(--card2)}
+  .btn-danger:hover{background:#ef444418;border-color:#ef444440}
+  /* Empty state */
+  .empty{text-align:center;padding:60px 20px;color:var(--muted2);background:var(--card);border:1px dashed var(--border);border-radius:var(--radius)}
+  .empty-icon{opacity:.3;margin-bottom:12px}
+  /* Toast */
+  .toast{position:fixed;bottom:24px;right:24px;background:var(--card);border:1px solid var(--border);padding:12px 18px;border-radius:10px;font-size:13px;display:none;box-shadow:0 10px 30px rgba(0,0,0,.5);z-index:100;max-width:320px}
+  .toast.show{display:block;animation:slideIn .2s ease}
+  @keyframes slideIn{from{transform:translateX(20px);opacity:0}to{transform:none;opacity:1}}
+  /* Responsive */
+  @media(max-width:960px){
+    .layout{grid-template-columns:1fr}
+    .sidebar{position:static;height:auto;flex-direction:row;overflow-x:auto;padding:12px;gap:8px}
+    .brand{display:none}
+    .nav{flex-direction:row;flex:none}
+    .nav-item{white-space:nowrap}
+    .logout-btn{white-space:nowrap}
+    .main{padding:20px}
+    .user-row{flex-wrap:wrap}
+    .urow-info{width:100%;order:3}
+    .search-wrap{width:100%}
+    .page-header{flex-direction:column;align-items:stretch}
+  }
+</style></head><body>
+<div class="layout">
+  <aside class="sidebar">
+    <div class="brand">
+      <div class="brand-logo">${svg(ICONS.shield, '#fff', 20)}</div>
+      <div>
+        <div class="brand-title">Runner Code</div>
+        <div class="brand-sub">Admin</div>
+      </div>
+    </div>
+    <nav class="nav">
+      <button class="nav-item active" data-section="overview" onclick="showSection('overview',this)">
+        ${svg(ICONS.dashboard, 'currentColor', 16)}<span>Overview</span>
+      </button>
+      <button class="nav-item" data-section="messages" onclick="showSection('messages',this)">
+        ${svg(ICONS.inbox, 'currentColor', 16)}<span>Messages</span>
+        <span class="nav-badge">${contacts.length}</span>
+      </button>
+      <button class="nav-item" data-section="users" onclick="showSection('users',this)">
+        ${svg(ICONS.users, 'currentColor', 16)}<span>Users</span>
+        <span class="nav-badge">${users.length}</span>
+      </button>
+    </nav>
+    <button class="logout-btn" onclick="logout()">
+      ${svg(ICONS.logout, 'currentColor', 16)}<span>Sign out</span>
+    </button>
+  </aside>
 
-  <h2><span style="display:inline-flex;align-items:center;gap:8px;">${svg(ICONS.users, '#E31E24', 18)}Users</span></h2>
-  <p class="section-label">Total: <strong>${users.length}</strong> user${users.length !== 1 ? 's' : ''}</p>
-  <table>
-    <thead><tr><th>#</th><th>Name</th><th>Email</th><th>Country</th><th>Auth</th><th>Registered</th><th>Action</th></tr></thead>
-    <tbody id="tbody">${userRows}</tbody>
-  </table>
+  <main class="main">
+    <!-- Overview -->
+    <section class="section active" id="sec-overview">
+      <div class="page-header">
+        <div>
+          <div class="page-title">Overview</div>
+          <div class="page-sub">Platform activity at a glance</div>
+        </div>
+      </div>
+      <div class="stats">
+        <div class="stat s-users">
+          <div class="stat-label">${svg(ICONS.users, '#E31E24', 12)}Total Users</div>
+          <div class="stat-value">${users.length}</div>
+          <div class="stat-foot">${googleUsers} via Google</div>
+        </div>
+        <div class="stat s-pending">
+          <div class="stat-label">${svg(ICONS.clock, '#f59e0b', 12)}Pending</div>
+          <div class="stat-value">${pendingCount}</div>
+          <div class="stat-foot">Awaiting review</div>
+        </div>
+        <div class="stat s-approved">
+          <div class="stat-label">${svg(ICONS.check, '#22c55e', 12)}Approved</div>
+          <div class="stat-value">${approvedCount}</div>
+          <div class="stat-foot">Accepted reports</div>
+        </div>
+        <div class="stat s-rejected">
+          <div class="stat-label">${svg(ICONS.x, '#ef4444', 12)}Rejected</div>
+          <div class="stat-value">${rejectedCount}</div>
+          <div class="stat-foot">Declined reports</div>
+        </div>
+      </div>
+      <div style="background:var(--card);border:1px solid var(--border);border-radius:var(--radius);padding:24px">
+        <h3 style="font-size:14px;font-weight:700;margin-bottom:6px">Welcome back</h3>
+        <p style="color:var(--muted);font-size:13px">Use the sidebar to navigate between sections. All actions are logged and decisions on reports are final.</p>
+      </div>
+    </section>
 
-  <h2><span style="display:inline-flex;align-items:center;gap:8px;">${svg(ICONS.inbox, '#E31E24', 18)}Contact Messages</span></h2>
-  <p class="section-label">Total: <strong>${contacts.length}</strong> message${contacts.length !== 1 ? 's' : ''}</p>
-  <table>
-    <thead><tr><th>#</th><th>Type</th><th>Subject</th><th>Message</th><th>From</th><th>Status</th><th>Sent At</th><th>Actions</th></tr></thead>
-    <tbody id="ctbody">${contactRows || '<tr><td colspan="8" style="color:#555;text-align:center">No messages yet</td></tr>'}</tbody>
-  </table>
+    <!-- Messages (grouped by user) -->
+    <section class="section" id="sec-messages">
+      <div class="page-header">
+        <div>
+          <div class="page-title">Contact Messages</div>
+          <div class="page-sub">${userGroups.length} user${userGroups.length === 1 ? '' : 's'} · ${contacts.length} message${contacts.length === 1 ? '' : 's'}</div>
+        </div>
+        <div class="search-wrap">
+          <span class="search-icon">${svg(ICONS.search, '#555', 15)}</span>
+          <input class="search-input" id="msgSearch" placeholder="Search by name or email…" oninput="filterCards('msgSearch','.user-card')">
+        </div>
+      </div>
+      ${userCards || `<div class="empty">${svg(ICONS.inbox, '#333', 48)}<div class="empty-icon"></div><p>No messages yet</p></div>`}
+    </section>
 
-  <div class="toast" id="toast"></div>
-  <script>
-    function showToast(msg, ok) {
-      const t = document.getElementById('toast');
-      t.textContent = msg;
-      t.style.display = 'block';
-      t.style.borderColor = ok ? '#34A853' : '#E31E24';
-      setTimeout(() => t.style.display = 'none', 3000);
-    }
-    function deleteUser(id, name) {
-      if (!confirm('Delete account of ' + name + '? This cannot be undone.')) return;
-      fetch('/admin/users/' + id + '?key=${key}', { method: 'DELETE' })
-        .then(r => r.json())
-        .then(d => {
-          if (d.ok) {
-            showToast('Deleted: ' + name, true);
-            document.querySelectorAll('#tbody tr').forEach(tr => {
-              if (tr.innerHTML.includes('deleteUser(' + id + ',')) tr.remove();
-            });
-          } else { showToast((d.error || 'Failed'), false); }
-        })
-        .catch(() => showToast('Network error', false));
-    }
-    function setStatus(id, status) {
-      const labels = { approved: 'Approve', rejected: 'Reject' };
-      if (!confirm(labels[status] + ' this message? This is final and cannot be changed.')) return;
-      fetch('/admin/contact/' + id + '/status?key=${key}', {
-        method: 'PATCH',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ status })
-      })
-        .then(r => r.json())
-        .then(d => {
-          if (d.ok) {
-            showToast('Status updated to: ' + status, true);
-            const SVG = (p, c) => '<svg xmlns="http://www.w3.org/2000/svg" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="' + c + '" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="vertical-align:middle;">' + p + '</svg>';
-            const clk = '<circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/>';
-            const chk = '<polyline points="20 6 9 17 4 12"/>';
-            const xic = '<path d="M18 6 6 18"/><path d="m6 6 12 12"/>';
-            const make = (bg, color, ic, lbl) =>
-              '<span style="display:inline-flex;align-items:center;gap:5px;background:' + bg + ';color:' + color + ';border:1px solid ' + color + '44;padding:3px 9px;border-radius:20px;font-size:11px;font-weight:600;">' + SVG(ic, color) + lbl + '</span>';
-            const badges = {
-              pending:  make('#f59e0b22', '#f59e0b', clk, 'Pending'),
-              approved: make('#22c55e22', '#22c55e', chk, 'Approved'),
-              rejected: make('#ef444422', '#ef4444', xic, 'Rejected'),
-            };
-            const el = document.getElementById('cstatus-' + id);
-            if (el) el.innerHTML = badges[status];
-            // Lock action buttons after decision — final, no takebacks
-            const act = document.getElementById('cactions-' + id);
-            if (act) act.innerHTML = '<span style="color:#555;font-size:11px;font-style:italic;padding:5px 2px;">Locked</span>';
-          } else { showToast((d.error || 'Failed'), false); }
-        })
-        .catch(() => showToast('Network error', false));
-    }
-  <\/script>
-</body>
-</html>`);
+    <!-- Users -->
+    <section class="section" id="sec-users">
+      <div class="page-header">
+        <div>
+          <div class="page-title">Users</div>
+          <div class="page-sub">${users.length} registered account${users.length === 1 ? '' : 's'}</div>
+        </div>
+        <div class="search-wrap">
+          <span class="search-icon">${svg(ICONS.search, '#555', 15)}</span>
+          <input class="search-input" id="userSearch" placeholder="Search users…" oninput="filterCards('userSearch','.user-row')">
+        </div>
+      </div>
+      ${userRows || `<div class="empty"><p>No users yet</p></div>`}
+    </section>
+  </main>
+</div>
+
+<div class="toast" id="toast"></div>
+<script>
+  function showSection(id, btn){
+    document.querySelectorAll('.section').forEach(s=>s.classList.remove('active'));
+    document.getElementById('sec-'+id).classList.add('active');
+    document.querySelectorAll('.nav-item').forEach(b=>b.classList.remove('active'));
+    btn.classList.add('active');
+  }
+  function toggleUser(id){
+    const card = document.getElementById('body-'+id)?.closest('.user-card');
+    if(card) card.classList.toggle('open');
+  }
+  function filterCards(inputId, selector){
+    const q = document.getElementById(inputId).value.toLowerCase().trim();
+    document.querySelectorAll(selector).forEach(el=>{
+      const s = el.dataset.search || '';
+      el.style.display = (!q || s.includes(q)) ? '' : 'none';
+    });
+  }
+  function showToast(msg, ok){
+    const t = document.getElementById('toast');
+    t.textContent = msg;
+    t.style.borderColor = ok ? '#22c55e55' : '#ef444455';
+    t.classList.add('show');
+    setTimeout(()=>t.classList.remove('show'), 3000);
+  }
+  function deleteUser(id, name){
+    if(!confirm('Delete account of ' + name + '? This cannot be undone.')) return;
+    fetch('/admin/users/'+id, { method:'DELETE', credentials:'include' })
+      .then(r=>r.json()).then(d=>{
+        if(d.ok){ showToast('Deleted: '+name, true); setTimeout(()=>location.reload(), 500); }
+        else showToast(d.error || 'Failed', false);
+      }).catch(()=>showToast('Network error', false));
+  }
+  function setStatus(id, status){
+    const labels = { approved:'Approve', rejected:'Reject' };
+    if(!confirm(labels[status] + ' this message? This is final.')) return;
+    fetch('/admin/contact/'+id+'/status', {
+      method:'PATCH',
+      headers:{'Content-Type':'application/json'},
+      credentials:'include',
+      body: JSON.stringify({ status })
+    }).then(r=>r.json()).then(d=>{
+      if(d.ok){ showToast('Status: ' + status, true); setTimeout(()=>location.reload(), 600); }
+      else showToast(d.error || 'Failed', false);
+    }).catch(()=>showToast('Network error', false));
+  }
+  function logout(){
+    fetch('/admin/logout', { method:'POST', credentials:'include' })
+      .then(()=>location.href='/admin');
+  }
+</script>
+</body></html>`);
 });
 
 // ── POST /api/contact ────────────────────────────────────────────────────────
@@ -713,11 +1066,7 @@ app.get('/api/contact/my', verifyToken, (req, res) => {
 });
 
 // ── DELETE /admin/users/:id ───────────────────────────────────────────────────
-app.delete('/admin/users/:id', (req, res) => {
-  const adminKey = process.env.ADMIN_KEY;
-  if (!adminKey || req.query.key !== adminKey) {
-    return res.status(401).json({ error: 'Unauthorized' });
-  }
+app.delete('/admin/users/:id', requireAdmin, (req, res) => {
   const id = parseInt(req.params.id, 10);
   if (!id) return res.status(400).json({ error: 'Invalid id' });
   const user = db.prepare('SELECT id FROM users WHERE id = ?').get(id);
@@ -736,17 +1085,12 @@ app.delete('/admin/users/:id', (req, res) => {
 });
 
 // ── PATCH /admin/contact/:id/status ─────────────────────────────────────────
-app.patch('/admin/contact/:id/status', (req, res) => {
-  const adminKey = process.env.ADMIN_KEY;
-  if (!adminKey || req.query.key !== adminKey) {
-    return res.status(401).json({ error: 'Unauthorized' });
-  }
+app.patch('/admin/contact/:id/status', requireAdmin, (req, res) => {
   const id = parseInt(req.params.id, 10);
   const { status } = req.body;
   if (!id) return res.status(400).json({ error: 'Invalid id' });
   if (!['approved', 'rejected'].includes(status)) return res.status(400).json({ error: 'Invalid status' });
   try {
-    // Only allow transition from 'pending' — final decisions are locked
     const current = db.prepare('SELECT status FROM contact_messages WHERE id = ?').get(id);
     if (!current) return res.status(404).json({ error: 'Message not found' });
     if (current.status !== 'pending') {
@@ -756,23 +1100,6 @@ app.patch('/admin/contact/:id/status', (req, res) => {
     res.json({ ok: true, status });
   } catch (err) {
     res.status(500).json({ error: err.message || 'Failed to update' });
-  }
-});
-
-// ── DELETE /admin/contact/:id ─────────────────────────────────────────────────
-app.delete('/admin/contact/:id', (req, res) => {
-  const adminKey = process.env.ADMIN_KEY;
-  if (!adminKey || req.query.key !== adminKey) {
-    return res.status(401).json({ error: 'Unauthorized' });
-  }
-  const id = parseInt(req.params.id, 10);
-  if (!id) return res.status(400).json({ error: 'Invalid id' });
-  try {
-    const info = db.prepare('DELETE FROM contact_messages WHERE id = ?').run(id);
-    if (info.changes === 0) return res.status(404).json({ error: 'Message not found' });
-    res.json({ ok: true });
-  } catch (err) {
-    res.status(500).json({ error: err.message || 'Failed to delete' });
   }
 });
 
