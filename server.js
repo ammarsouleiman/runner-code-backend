@@ -628,7 +628,41 @@ app.get('/admin/dashboard', (req, res) => {
   const pendingCount = contacts.filter(c => c.status === 'pending').length;
   const approvedCount = contacts.filter(c => c.status === 'approved').length;
   const rejectedCount = contacts.filter(c => c.status === 'rejected').length;
-  const googleUsers = users.filter(u => u.google_id).length;
+  const totalDecided = approvedCount + rejectedCount;
+  const approvalRate = totalDecided ? Math.round((approvedCount / totalDecided) * 100) : 0;
+  const totalContacts = contacts.length;
+  const pct = (n) => totalContacts ? Math.round((n / totalContacts) * 100) : 0;
+
+  // Type breakdown
+  const typeCounts = {
+    bug:        contacts.filter(c => c.type === 'bug').length,
+    suggestion: contacts.filter(c => c.type === 'suggestion').length,
+    request:    contacts.filter(c => c.type === 'request').length,
+    other:      contacts.filter(c => c.type === 'other').length,
+  };
+
+  // Auth breakdown
+  const hasRealPw = (u) => u.password_hash && u.password_hash !== 'GOOGLE_AUTH' && u.password_hash.startsWith('$2');
+  const googleUsers = users.filter(u => u.google_id && !hasRealPw(u)).length;
+  const pwOnlyUsers = users.filter(u => !u.google_id && hasRealPw(u)).length;
+  const dualUsers   = users.filter(u => u.google_id && hasRealPw(u)).length;
+  const googleTotal = users.filter(u => u.google_id).length;
+
+  // Recent activity
+  const recentContacts = [...contacts]
+    .sort((a, b) => new Date(b.created_at || 0).getTime() - new Date(a.created_at || 0).getTime())
+    .slice(0, 5);
+
+  // Users in last 7 days
+  const weekAgo = Date.now() - 7 * 24 * 60 * 60 * 1000;
+  const newUsers7d = users.filter(u => {
+    const t = new Date(u.created_at || 0).getTime();
+    return t && t >= weekAgo;
+  }).length;
+  const msgs7d = contacts.filter(c => {
+    const t = new Date(c.created_at || 0).getTime();
+    return t && t >= weekAgo;
+  }).length;
 
   // Helpers
   const typeIcon = {
@@ -794,6 +828,85 @@ app.get('/admin/dashboard', (req, res) => {
   .stat.s-users .stat-value{color:var(--primary)}
   .stat{transition:transform .15s ease, border-color .15s}
   .stat:hover{transform:translateY(-2px);border-color:#333}
+  /* === Overview redesign === */
+  /* Hero */
+  .hero{position:relative;background:linear-gradient(135deg,#18181b 0%,#0f0f10 100%);border:1px solid var(--border);border-radius:20px;padding:32px;margin-bottom:24px;overflow:hidden;display:grid;grid-template-columns:1fr 280px;gap:32px;align-items:center}
+  .hero-bg{position:absolute;inset:0;background:radial-gradient(circle at 85% 30%, rgba(227,30,36,.16) 0%, transparent 45%), radial-gradient(circle at 10% 100%, rgba(59,130,246,.08) 0%, transparent 40%);pointer-events:none}
+  .hero-content{position:relative;z-index:1}
+  .hero-badge{display:inline-flex;align-items:center;gap:7px;background:rgba(34,197,94,.1);color:#22c55e;font-size:11px;font-weight:700;padding:5px 12px;border-radius:12px;border:1px solid rgba(34,197,94,.25);text-transform:uppercase;letter-spacing:1px}
+  .live-dot{width:6px;height:6px;border-radius:50%;background:#22c55e;box-shadow:0 0 0 0 rgba(34,197,94,.7);animation:pulse 2s infinite}
+  @keyframes pulse{0%{box-shadow:0 0 0 0 rgba(34,197,94,.7)}70%{box-shadow:0 0 0 8px rgba(34,197,94,0)}100%{box-shadow:0 0 0 0 rgba(34,197,94,0)}}
+  .hero-title{font-size:30px;font-weight:800;letter-spacing:-1px;margin:14px 0 6px;background:linear-gradient(135deg,#fff,#999);-webkit-background-clip:text;background-clip:text;-webkit-text-fill-color:transparent}
+  .hero-sub{color:var(--muted);font-size:14px;margin-bottom:18px}
+  .hero-meta{display:flex;align-items:center;gap:10px;color:var(--muted);font-size:12px;flex-wrap:wrap}
+  .hero-meta-item{display:inline-flex;align-items:center;gap:6px}
+  .hero-meta-dot{width:3px;height:3px;border-radius:50%;background:var(--muted2)}
+  .hero-kpi{position:relative;z-index:1;background:rgba(0,0,0,.35);border:1px solid var(--border-soft);border-radius:16px;padding:20px;backdrop-filter:blur(10px)}
+  .kpi-label{color:var(--muted);font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:1.5px}
+  .kpi-value{font-size:42px;font-weight:800;letter-spacing:-1.5px;margin-top:4px;background:linear-gradient(135deg,#22c55e,#4ade80);-webkit-background-clip:text;background-clip:text;-webkit-text-fill-color:transparent}
+  .kpi-value span{font-size:20px;margin-left:2px}
+  .kpi-bar{height:6px;background:rgba(255,255,255,.06);border-radius:6px;margin-top:10px;overflow:hidden}
+  .kpi-bar-fill{height:100%;background:linear-gradient(90deg,#22c55e,#4ade80);border-radius:6px;transition:width .6s cubic-bezier(.2,.8,.2,1)}
+  .kpi-foot{color:var(--muted2);font-size:11px;margin-top:8px}
+  /* Stat grid */
+  .stats-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(200px,1fr));gap:14px;margin-bottom:24px}
+  .stat-card{position:relative;background:var(--card);border:1px solid var(--border);border-radius:16px;padding:18px;overflow:hidden;transition:transform .15s,border-color .15s}
+  .stat-card:hover{transform:translateY(-3px);border-color:#333}
+  .stat-card::before{content:'';position:absolute;top:0;left:0;right:0;height:3px;border-radius:16px 16px 0 0}
+  .sc-users::before{background:linear-gradient(90deg,#E31E24,#8b1217)}
+  .sc-msgs::before{background:linear-gradient(90deg,#8b5cf6,#6d28d9)}
+  .sc-pending::before{background:linear-gradient(90deg,#f59e0b,#b45309)}
+  .sc-approved::before{background:linear-gradient(90deg,#22c55e,#15803d)}
+  .sc-rejected::before{background:linear-gradient(90deg,#ef4444,#b91c1c)}
+  .sc-icon{width:40px;height:40px;border-radius:12px;display:flex;align-items:center;justify-content:center;margin-bottom:14px}
+  .sc-users .sc-icon{background:linear-gradient(135deg,#E31E24,#8b1217)}
+  .sc-msgs .sc-icon{background:linear-gradient(135deg,#8b5cf6,#6d28d9)}
+  .sc-pending .sc-icon{background:linear-gradient(135deg,#f59e0b,#b45309)}
+  .sc-approved .sc-icon{background:linear-gradient(135deg,#22c55e,#15803d)}
+  .sc-rejected .sc-icon{background:linear-gradient(135deg,#ef4444,#b91c1c)}
+  .sc-label{color:var(--muted);font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:1.5px}
+  .sc-value{font-size:30px;font-weight:800;letter-spacing:-1px;margin-top:4px;color:var(--text)}
+  .sc-delta{font-size:11px;font-weight:700;margin-top:8px;display:inline-flex;align-items:center;gap:4px;padding:3px 8px;border-radius:8px}
+  .sc-delta.up{color:#22c55e;background:rgba(34,197,94,.1)}
+  .sc-delta.down{color:#ef4444;background:rgba(239,68,68,.1)}
+  .sc-delta.neutral{color:var(--muted);background:rgba(255,255,255,.04)}
+  /* Two-column grid */
+  .grid-two{display:grid;grid-template-columns:1fr 1fr;gap:14px;margin-bottom:24px}
+  /* Panel */
+  .panel{background:var(--card);border:1px solid var(--border);border-radius:16px;overflow:hidden}
+  .panel-head{display:flex;align-items:center;justify-content:space-between;padding:18px 20px;border-bottom:1px solid var(--border-soft)}
+  .panel-title{font-size:14px;font-weight:700;color:var(--text)}
+  .panel-sub{font-size:11px;color:var(--muted);margin-top:2px}
+  .panel-ico{opacity:.5}
+  .panel-action{display:inline-flex;align-items:center;gap:6px;background:transparent;border:1px solid var(--border);color:var(--muted);font-size:12px;font-weight:700;padding:6px 12px;border-radius:8px;cursor:pointer;font-family:inherit;transition:all .15s}
+  .panel-action:hover{border-color:var(--primary);color:var(--primary)}
+  .panel-body{padding:16px 20px}
+  .panel-note{color:var(--muted2);font-size:11px;margin-top:10px;padding-top:10px;border-top:1px dashed var(--border-soft);font-style:italic}
+  /* Breakdown rows */
+  .bd-row{display:grid;grid-template-columns:140px 1fr auto;gap:12px;align-items:center;padding:10px 0}
+  .bd-row + .bd-row{border-top:1px solid var(--border-soft)}
+  .bd-label{display:inline-flex;align-items:center;gap:8px;font-size:12px;font-weight:600;color:var(--text)}
+  .bd-bar{height:8px;background:rgba(255,255,255,.04);border-radius:8px;overflow:hidden}
+  .bd-fill{height:100%;border-radius:8px;transition:width .6s cubic-bezier(.2,.8,.2,1)}
+  .bd-val{font-size:13px;font-weight:700;color:var(--text);min-width:60px;text-align:right}
+  .bd-pct{color:var(--muted);font-weight:600;font-size:11px;margin-left:6px}
+  /* Activity */
+  .act-row{display:flex;align-items:center;gap:12px;padding:12px 0}
+  .act-row + .act-row{border-top:1px solid var(--border-soft)}
+  .act-dot{width:8px;height:8px;border-radius:50%;flex-shrink:0}
+  .act-main{flex:1;min-width:0}
+  .act-title{font-size:13px;font-weight:700;color:var(--text);display:inline-flex;align-items:center;gap:6px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;max-width:100%}
+  .act-title span{overflow:hidden;text-overflow:ellipsis}
+  .act-meta{color:var(--muted);font-size:11px;margin-top:2px}
+  .act-side{display:flex;flex-direction:column;align-items:flex-end;gap:4px;flex-shrink:0}
+  .act-time{color:var(--muted2);font-size:10px}
+  .empty-inline{text-align:center;padding:28px;color:var(--muted2);font-size:12px}
+  .empty-inline p{margin-top:8px}
+  @media(max-width:1100px){
+    .hero{grid-template-columns:1fr;padding:24px}
+    .hero-kpi{max-width:320px}
+    .grid-two{grid-template-columns:1fr}
+  }
   /* Sections */
   .section{display:none}
   .section.active{display:block;animation:fadeIn .25s ease}
@@ -931,37 +1044,140 @@ app.get('/admin/dashboard', (req, res) => {
   <main class="main">
     <!-- Overview -->
     <section class="section active" id="sec-overview">
-      <div class="page-header">
-        <div>
-          <div class="page-title">Overview</div>
-          <div class="page-sub">Platform activity at a glance</div>
+      <!-- Hero -->
+      <div class="hero">
+        <div class="hero-bg"></div>
+        <div class="hero-content">
+          <div class="hero-badge"><span class="live-dot"></span> Live dashboard</div>
+          <h1 class="hero-title">Welcome back, Admin</h1>
+          <p class="hero-sub">Here's what's happening across Runner Code today.</p>
+          <div class="hero-meta">
+            <span class="hero-meta-item">${svg(ICONS.calendar, 'currentColor', 13)}<span id="nowDate"></span></span>
+            <span class="hero-meta-dot"></span>
+            <span class="hero-meta-item">${svg(ICONS.shield, 'currentColor', 13)} Session secure</span>
+          </div>
+        </div>
+        <div class="hero-kpi">
+          <div class="kpi-label">Approval rate</div>
+          <div class="kpi-value">${approvalRate}<span>%</span></div>
+          <div class="kpi-bar"><div class="kpi-bar-fill" style="width:${approvalRate}%"></div></div>
+          <div class="kpi-foot">${totalDecided} decision${totalDecided === 1 ? '' : 's'} so far</div>
         </div>
       </div>
-      <div class="stats">
-        <div class="stat s-users">
-          <div class="stat-label">${svg(ICONS.users, '#E31E24', 12)}Total Users</div>
-          <div class="stat-value">${users.length}</div>
-          <div class="stat-foot">${googleUsers} via Google</div>
+
+      <!-- Stat grid -->
+      <div class="stats-grid">
+        <div class="stat-card sc-users">
+          <div class="sc-icon">${svg(ICONS.users, '#fff', 20)}</div>
+          <div class="sc-label">Total users</div>
+          <div class="sc-value">${users.length}</div>
+          <div class="sc-delta up">+${newUsers7d} this week</div>
         </div>
-        <div class="stat s-pending">
-          <div class="stat-label">${svg(ICONS.clock, '#f59e0b', 12)}Pending</div>
-          <div class="stat-value">${pendingCount}</div>
-          <div class="stat-foot">Awaiting review</div>
+        <div class="stat-card sc-msgs">
+          <div class="sc-icon">${svg(ICONS.inbox, '#fff', 20)}</div>
+          <div class="sc-label">Total messages</div>
+          <div class="sc-value">${totalContacts}</div>
+          <div class="sc-delta up">+${msgs7d} this week</div>
         </div>
-        <div class="stat s-approved">
-          <div class="stat-label">${svg(ICONS.check, '#22c55e', 12)}Approved</div>
-          <div class="stat-value">${approvedCount}</div>
-          <div class="stat-foot">Accepted reports</div>
+        <div class="stat-card sc-pending">
+          <div class="sc-icon">${svg(ICONS.clock, '#fff', 20)}</div>
+          <div class="sc-label">Awaiting review</div>
+          <div class="sc-value">${pendingCount}</div>
+          <div class="sc-delta neutral">${pct(pendingCount)}% of total</div>
         </div>
-        <div class="stat s-rejected">
-          <div class="stat-label">${svg(ICONS.x, '#ef4444', 12)}Rejected</div>
-          <div class="stat-value">${rejectedCount}</div>
-          <div class="stat-foot">Declined reports</div>
+        <div class="stat-card sc-approved">
+          <div class="sc-icon">${svg(ICONS.check, '#fff', 20)}</div>
+          <div class="sc-label">Approved</div>
+          <div class="sc-value">${approvedCount}</div>
+          <div class="sc-delta up">${pct(approvedCount)}% of total</div>
+        </div>
+        <div class="stat-card sc-rejected">
+          <div class="sc-icon">${svg(ICONS.x, '#fff', 20)}</div>
+          <div class="sc-label">Rejected</div>
+          <div class="sc-value">${rejectedCount}</div>
+          <div class="sc-delta down">${pct(rejectedCount)}% of total</div>
         </div>
       </div>
-      <div style="background:var(--card);border:1px solid var(--border);border-radius:var(--radius);padding:24px">
-        <h3 style="font-size:14px;font-weight:700;margin-bottom:6px">Welcome back</h3>
-        <p style="color:var(--muted);font-size:13px">Use the sidebar to navigate between sections. All actions are logged and decisions on reports are final.</p>
+
+      <!-- Two column: breakdowns + activity -->
+      <div class="grid-two">
+        <!-- Breakdown: message types -->
+        <div class="panel">
+          <div class="panel-head">
+            <div>
+              <div class="panel-title">Message types</div>
+              <div class="panel-sub">Distribution by category</div>
+            </div>
+            <span class="panel-ico">${svg(ICONS.inbox, 'var(--muted)', 16)}</span>
+          </div>
+          <div class="panel-body">
+            ${[
+              { key: 'bug',        label: 'Bug reports',   color: '#ef4444', ic: svg(ICONS.bug, '#ef4444', 14) },
+              { key: 'suggestion', label: 'Suggestions',   color: '#eab308', ic: svg(ICONS.lightbulb, '#eab308', 14) },
+              { key: 'request',    label: 'Feature requests', color: '#3b82f6', ic: svg(ICONS.wrench, '#3b82f6', 14) },
+              { key: 'other',      label: 'Other',          color: '#94a3b8', ic: svg(ICONS.message, '#94a3b8', 14) },
+            ].map(t => {
+              const n = typeCounts[t.key];
+              const p = totalContacts ? Math.round((n / totalContacts) * 100) : 0;
+              return `<div class="bd-row">
+                <div class="bd-label">${t.ic}<span>${t.label}</span></div>
+                <div class="bd-bar"><div class="bd-fill" style="width:${p}%;background:${t.color}"></div></div>
+                <div class="bd-val">${n}<span class="bd-pct">${p}%</span></div>
+              </div>`;
+            }).join('')}
+          </div>
+        </div>
+
+        <!-- Breakdown: auth methods -->
+        <div class="panel">
+          <div class="panel-head">
+            <div>
+              <div class="panel-title">Authentication</div>
+              <div class="panel-sub">How users sign in</div>
+            </div>
+            <span class="panel-ico">${svg(ICONS.shield, 'var(--muted)', 16)}</span>
+          </div>
+          <div class="panel-body">
+            ${[
+              { label: 'Google only',     n: googleUsers, color: '#4285F4', ic: svg(ICONS.google, '#4285F4', 14) },
+              { label: 'Password only',   n: pwOnlyUsers, color: '#eab308', ic: svg(ICONS.key, '#eab308', 14) },
+              { label: 'Google + Password', n: dualUsers, color: '#22c55e', ic: svg(ICONS.shield, '#22c55e', 14) },
+            ].map(t => {
+              const p = users.length ? Math.round((t.n / users.length) * 100) : 0;
+              return `<div class="bd-row">
+                <div class="bd-label">${t.ic}<span>${t.label}</span></div>
+                <div class="bd-bar"><div class="bd-fill" style="width:${p}%;background:${t.color}"></div></div>
+                <div class="bd-val">${t.n}<span class="bd-pct">${p}%</span></div>
+              </div>`;
+            }).join('')}
+            <div class="panel-note">${googleTotal} user${googleTotal === 1 ? '' : 's'} connected a Google account</div>
+          </div>
+        </div>
+      </div>
+
+      <!-- Recent activity -->
+      <div class="panel">
+        <div class="panel-head">
+          <div>
+            <div class="panel-title">Recent activity</div>
+            <div class="panel-sub">Last ${recentContacts.length} message${recentContacts.length === 1 ? '' : 's'}</div>
+          </div>
+          <button class="panel-action" onclick="showSection('messages', document.querySelector('[data-section=messages]'))">View all ${svg(ICONS.inbox, 'currentColor', 12)}</button>
+        </div>
+        <div class="panel-body">
+          ${recentContacts.length ? recentContacts.map(c => `
+            <div class="act-row">
+              <span class="act-dot" style="background:${typeColorDot[c.type] || '#94a3b8'}"></span>
+              <div class="act-main">
+                <div class="act-title">${typeIcon[c.type] || typeIcon.other}<span>${escapeHtml(c.subject || '(no subject)')}</span></div>
+                <div class="act-meta">${escapeHtml(c.user_name || 'Unknown')} · ${escapeHtml(c.user_email || '—')}</div>
+              </div>
+              <div class="act-side">
+                ${statusPill(c.status)}
+                <span class="act-time">${escapeHtml(c.created_at || '')}</span>
+              </div>
+            </div>`).join('') : `<div class="empty-inline">${svg(ICONS.inbox, '#333', 32)}<p>No activity yet</p></div>`}
+        </div>
       </div>
     </section>
 
@@ -1075,6 +1291,14 @@ app.get('/admin/dashboard', (req, res) => {
       closeConfirm(false);
     }
   });
+  // Live date in hero
+  (function updateNow(){
+    const el = document.getElementById('nowDate');
+    if(!el) return;
+    const d = new Date();
+    el.textContent = d.toLocaleDateString(undefined, { weekday:'long', year:'numeric', month:'long', day:'numeric' }) + ' · ' + d.toLocaleTimeString(undefined, { hour:'2-digit', minute:'2-digit' });
+    setTimeout(updateNow, 30000);
+  })();
   async function deleteUser(id, name, email){
     const initials = String(name||'?').trim().split(/\\s+/).map(p=>p[0]).slice(0,2).join('').toUpperCase() || '?';
     const targetHtml = '<div class="modal-target"><div class="avatar">' + initials + '</div><div><div class="modal-target-name">' + name + '</div><div class="modal-target-meta">' + (email||'') + '</div></div></div>';
