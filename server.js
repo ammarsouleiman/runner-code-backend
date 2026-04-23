@@ -534,9 +534,8 @@ app.get('/admin/users', (req, res) => {
       <td id="cstatus-${c.id}">${statusBadge[c.status] || statusBadge.pending}</td>
       <td>${escapeHtml(c.created_at || '—')}</td>
       <td style="white-space:nowrap;display:flex;gap:4px;flex-wrap:wrap;">
-        <button onclick="setStatus(${c.id},'approved')" style="background:#22c55e;color:#fff;border:none;padding:4px 8px;border-radius:6px;cursor:pointer;font-size:11px;">✅ Approve</button>
-        <button onclick="setStatus(${c.id},'rejected')" style="background:#ef4444;color:#fff;border:none;padding:4px 8px;border-radius:6px;cursor:pointer;font-size:11px;">❌ Reject</button>
-        <button onclick="deleteContact(${c.id})" style="background:#555;color:#fff;border:none;padding:4px 8px;border-radius:6px;cursor:pointer;font-size:11px;">🗑️</button>
+        <button onclick="setStatus(${c.id},'approved')" style="background:#22c55e;color:#fff;border:none;padding:4px 10px;border-radius:6px;cursor:pointer;font-size:11px;">✅ Approve</button>
+        <button onclick="setStatus(${c.id},'rejected')" style="background:#ef4444;color:#fff;border:none;padding:4px 10px;border-radius:6px;cursor:pointer;font-size:11px;">❌ Reject</button>
       </td>
     </tr>`).join('');
   res.send(`<!DOCTYPE html>
@@ -669,11 +668,15 @@ app.post('/api/contact', verifyToken, (req, res) => {
 // ── GET /api/contact/my ───────────────────────────────────────────────────────
 app.get('/api/contact/my', verifyToken, (req, res) => {
   try {
+    // Match by user_id (new reports) OR by email as fallback (old reports before migration)
     const rows = db.prepare(
-      'SELECT id, type, subject, status, created_at FROM contact_messages WHERE user_id = ? ORDER BY created_at DESC'
-    ).all(req.user.id);
+      `SELECT id, type, subject, status, created_at FROM contact_messages
+       WHERE user_id = ? OR (user_id IS NULL AND user_email = ?)
+       ORDER BY created_at DESC`
+    ).all(req.user.id, req.user.email);
     res.json(rows);
   } catch (err) {
+    console.error('GET /api/contact/my error:', err.message);
     res.status(500).json({ error: 'Failed to load' });
   }
 });
