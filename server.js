@@ -496,19 +496,48 @@ app.get('/admin/users', (req, res) => {
   const users = db.prepare('SELECT id, name, email, country, password_hash, google_id, created_at FROM users ORDER BY created_at DESC').all();
   const contacts = db.prepare('SELECT id, type, subject, message, user_name, user_email, status, created_at FROM contact_messages ORDER BY created_at DESC').all();
   const key = encodeURIComponent(req.query.key);
-  const typeEmoji = { bug: '🐛', suggestion: '💡', request: '🔧', other: '💬' };
+
+  // Inline Lucide SVG icons (no emojis)
+  const svg = (path, color = 'currentColor', size = 14) =>
+    `<svg xmlns="http://www.w3.org/2000/svg" width="${size}" height="${size}" viewBox="0 0 24 24" fill="none" stroke="${color}" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="vertical-align:middle;">${path}</svg>`;
+  const ICONS = {
+    bug:        '<path d="m8 2 1.88 1.88"/><path d="M14.12 3.88 16 2"/><path d="M9 7.13v-1a3.003 3.003 0 1 1 6 0v1"/><path d="M12 20c-3.3 0-6-2.7-6-6v-3a4 4 0 0 1 4-4h4a4 4 0 0 1 4 4v3c0 3.3-2.7 6-6 6"/><path d="M12 20v-9"/><path d="M6.53 9C4.6 8.8 3 7.1 3 5"/><path d="M6 13H2"/><path d="M3 21c0-2.1 1.7-3.9 3.8-4"/><path d="M20.97 5c0 2.1-1.6 3.8-3.5 4"/><path d="M22 13h-4"/><path d="M17.2 17c2.1.1 3.8 1.9 3.8 4"/>',
+    lightbulb:  '<path d="M15 14c.2-1 .7-1.7 1.5-2.5 1-.9 1.5-2.2 1.5-3.5A6 6 0 0 0 6 8c0 1 .2 2.2 1.5 3.5.7.7 1.3 1.5 1.5 2.5"/><path d="M9 18h6"/><path d="M10 22h4"/>',
+    wrench:     '<path d="M14.7 6.3a1 1 0 0 0 0 1.4l1.6 1.6a1 1 0 0 0 1.4 0l3.77-3.77a6 6 0 0 1-7.94 7.94l-6.91 6.91a2.12 2.12 0 0 1-3-3l6.91-6.91a6 6 0 0 1 7.94-7.94l-3.76 3.76z"/>',
+    message:    '<path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/>',
+    clock:      '<circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/>',
+    check:      '<polyline points="20 6 9 17 4 12"/>',
+    x:          '<path d="M18 6 6 18"/><path d="m6 6 12 12"/>',
+    users:      '<path d="M16 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M22 21v-2a4 4 0 0 0-3-3.87"/><path d="M16 3.13a4 4 0 0 1 0 7.75"/>',
+    inbox:      '<polyline points="22 12 16 12 14 15 10 15 8 12 2 12"/><path d="M5.45 5.11 2 12v6a2 2 0 0 0 2 2h16a2 2 0 0 0 2-2v-6l-3.45-6.89A2 2 0 0 0 16.76 4H7.24a2 2 0 0 0-1.79 1.11z"/>',
+    google:     '<circle cx="12" cy="12" r="10"/><circle cx="12" cy="12" r="4"/><line x1="21.17" y1="8" x2="12" y2="8"/><line x1="3.95" y1="6.06" x2="8.54" y2="14"/><line x1="10.88" y1="21.94" x2="15.46" y2="14"/>',
+    key:        '<circle cx="7.5" cy="15.5" r="5.5"/><path d="m21 2-9.6 9.6"/><path d="m15.5 7.5 3 3L22 7l-3-3"/>',
+    alert:      '<path d="m21.73 18-8-14a2 2 0 0 0-3.48 0l-8 14A2 2 0 0 0 4 21h16a2 2 0 0 0 1.73-3Z"/><path d="M12 9v4"/><path d="M12 17h.01"/>',
+    trash:      '<path d="M3 6h18"/><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6"/><path d="M8 6V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/>',
+  };
+  const typeIcon = {
+    bug:        svg(ICONS.bug,       '#ef4444'),
+    suggestion: svg(ICONS.lightbulb, '#eab308'),
+    request:    svg(ICONS.wrench,    '#3b82f6'),
+    other:      svg(ICONS.message,   '#888'),
+  };
+  const pill = (bg, color, iconSvg, label) =>
+    `<span style="display:inline-flex;align-items:center;gap:5px;background:${bg};color:${color};border:1px solid ${color}44;padding:3px 9px;border-radius:20px;font-size:11px;font-weight:600;">${iconSvg}${label}</span>`;
   const statusBadge = {
-    pending:  '<span style="background:#f59e0b22;color:#f59e0b;border:1px solid #f59e0b44;padding:2px 8px;border-radius:20px;font-size:11px;font-weight:600;">⏳ Pending</span>',
-    approved: '<span style="background:#22c55e22;color:#22c55e;border:1px solid #22c55e44;padding:2px 8px;border-radius:20px;font-size:11px;font-weight:600;">✅ Approved</span>',
-    rejected: '<span style="background:#ef444422;color:#ef4444;border:1px solid #ef444444;padding:2px 8px;border-radius:20px;font-size:11px;font-weight:600;">❌ Rejected</span>',
+    pending:  pill('#f59e0b22', '#f59e0b', svg(ICONS.clock, '#f59e0b', 12), 'Pending'),
+    approved: pill('#22c55e22', '#22c55e', svg(ICONS.check, '#22c55e', 12), 'Approved'),
+    rejected: pill('#ef444422', '#ef4444', svg(ICONS.x,     '#ef4444', 12), 'Rejected'),
   };
   const userRows = users.map(u => {
     const hasRealPassword = u.password_hash && u.password_hash !== 'GOOGLE_AUTH' && u.password_hash.startsWith('$2');
     let authType;
-    if (u.google_id && hasRealPassword) authType = '🔵 Google + 🔑 Password';
-    else if (u.google_id)              authType = '🔵 Google only (no password)';
-    else if (hasRealPassword)          authType = '🔑 Password';
-    else                               authType = '⚠️ No auth';
+    const iconG = svg(ICONS.google, '#4285F4', 12);
+    const iconK = svg(ICONS.key,    '#eab308', 12);
+    const iconA = svg(ICONS.alert,  '#f59e0b', 12);
+    if (u.google_id && hasRealPassword) authType = `<span style="display:inline-flex;align-items:center;gap:4px;">${iconG} Google + ${iconK} Password</span>`;
+    else if (u.google_id)              authType = `<span style="display:inline-flex;align-items:center;gap:4px;">${iconG} Google only</span>`;
+    else if (hasRealPassword)          authType = `<span style="display:inline-flex;align-items:center;gap:4px;">${iconK} Password</span>`;
+    else                               authType = `<span style="display:inline-flex;align-items:center;gap:4px;">${iconA} No auth</span>`;
     return `
     <tr>
       <td>${u.id}</td>
@@ -519,23 +548,23 @@ app.get('/admin/users', (req, res) => {
       <td>${escapeHtml(u.created_at || '—')}</td>
       <td>
         <button onclick="deleteUser(${u.id}, '${escapeHtml(u.name)}')" 
-          style="background:#E31E24;color:#fff;border:none;padding:4px 10px;border-radius:6px;cursor:pointer;font-size:12px;"
-        >Delete</button>
+          style="display:inline-flex;align-items:center;gap:5px;background:#E31E24;color:#fff;border:none;padding:5px 11px;border-radius:6px;cursor:pointer;font-size:12px;"
+        >${svg(ICONS.trash, '#fff', 12)}Delete</button>
       </td>
     </tr>`;
   }).join('');
   const contactRows = contacts.map(c => `
     <tr id="crow-${c.id}">
       <td>${c.id}</td>
-      <td>${typeEmoji[c.type] || '💬'} ${escapeHtml(c.type)}</td>
+      <td><span style="display:inline-flex;align-items:center;gap:6px;">${typeIcon[c.type] || typeIcon.other}${escapeHtml(c.type)}</span></td>
       <td><strong>${escapeHtml(c.subject)}</strong></td>
       <td style="max-width:300px;white-space:pre-wrap;word-break:break-word;">${escapeHtml(c.message)}</td>
       <td>${escapeHtml(c.user_name)}<br><small style="color:#888">${escapeHtml(c.user_email)}</small></td>
       <td id="cstatus-${c.id}">${statusBadge[c.status] || statusBadge.pending}</td>
       <td>${escapeHtml(c.created_at || '—')}</td>
       <td style="white-space:nowrap;display:flex;gap:4px;flex-wrap:wrap;">
-        <button onclick="setStatus(${c.id},'approved')" style="background:#22c55e;color:#fff;border:none;padding:4px 10px;border-radius:6px;cursor:pointer;font-size:11px;">✅ Approve</button>
-        <button onclick="setStatus(${c.id},'rejected')" style="background:#ef4444;color:#fff;border:none;padding:4px 10px;border-radius:6px;cursor:pointer;font-size:11px;">❌ Reject</button>
+        <button onclick="setStatus(${c.id},'approved')" style="display:inline-flex;align-items:center;gap:5px;background:#22c55e;color:#fff;border:none;padding:5px 11px;border-radius:6px;cursor:pointer;font-size:11px;">${svg(ICONS.check, '#fff', 12)}Approve</button>
+        <button onclick="setStatus(${c.id},'rejected')" style="display:inline-flex;align-items:center;gap:5px;background:#ef4444;color:#fff;border:none;padding:5px 11px;border-radius:6px;cursor:pointer;font-size:11px;">${svg(ICONS.x, '#fff', 12)}Reject</button>
       </td>
     </tr>`).join('');
   res.send(`<!DOCTYPE html>
@@ -559,14 +588,14 @@ app.get('/admin/users', (req, res) => {
 <body>
   <h1>Runner Code — Admin</h1>
 
-  <h2>👥 Users</h2>
+  <h2><span style="display:inline-flex;align-items:center;gap:8px;">${svg(ICONS.users, '#E31E24', 18)}Users</span></h2>
   <p class="section-label">Total: <strong>${users.length}</strong> user${users.length !== 1 ? 's' : ''}</p>
   <table>
     <thead><tr><th>#</th><th>Name</th><th>Email</th><th>Country</th><th>Auth</th><th>Registered</th><th>Action</th></tr></thead>
     <tbody id="tbody">${userRows}</tbody>
   </table>
 
-  <h2>📩 Contact Messages</h2>
+  <h2><span style="display:inline-flex;align-items:center;gap:8px;">${svg(ICONS.inbox, '#E31E24', 18)}Contact Messages</span></h2>
   <p class="section-label">Total: <strong>${contacts.length}</strong> message${contacts.length !== 1 ? 's' : ''}</p>
   <table>
     <thead><tr><th>#</th><th>Type</th><th>Subject</th><th>Message</th><th>From</th><th>Status</th><th>Sent At</th><th>Actions</th></tr></thead>
@@ -588,27 +617,13 @@ app.get('/admin/users', (req, res) => {
         .then(r => r.json())
         .then(d => {
           if (d.ok) {
-            showToast('✅ Deleted: ' + name, true);
+            showToast('Deleted: ' + name, true);
             document.querySelectorAll('#tbody tr').forEach(tr => {
               if (tr.innerHTML.includes('deleteUser(' + id + ',')) tr.remove();
             });
-          } else { showToast('❌ ' + (d.error || 'Failed'), false); }
+          } else { showToast((d.error || 'Failed'), false); }
         })
-        .catch(() => showToast('❌ Network error', false));
-    }
-    function deleteContact(id) {
-      if (!confirm('Delete this contact message?')) return;
-      fetch('/admin/contact/' + id + '?key=${key}', { method: 'DELETE' })
-        .then(r => r.json())
-        .then(d => {
-          if (d.ok) {
-            showToast('✅ Message deleted', true);
-            document.querySelectorAll('#ctbody tr').forEach(tr => {
-              if (tr.id === 'crow-' + id) tr.remove();
-            });
-          } else { showToast('❌ ' + (d.error || 'Failed'), false); }
-        })
-        .catch(() => showToast('❌ Network error', false));
+        .catch(() => showToast('Network error', false));
     }
     function setStatus(id, status) {
       const labels = { approved: 'Approve', rejected: 'Reject' };
@@ -621,17 +636,23 @@ app.get('/admin/users', (req, res) => {
         .then(r => r.json())
         .then(d => {
           if (d.ok) {
-            showToast('✅ Status updated to: ' + status, true);
+            showToast('Status updated to: ' + status, true);
+            const SVG = (p, c) => '<svg xmlns="http://www.w3.org/2000/svg" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="' + c + '" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="vertical-align:middle;">' + p + '</svg>';
+            const clk = '<circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/>';
+            const chk = '<polyline points="20 6 9 17 4 12"/>';
+            const xic = '<path d="M18 6 6 18"/><path d="m6 6 12 12"/>';
+            const make = (bg, color, ic, lbl) =>
+              '<span style="display:inline-flex;align-items:center;gap:5px;background:' + bg + ';color:' + color + ';border:1px solid ' + color + '44;padding:3px 9px;border-radius:20px;font-size:11px;font-weight:600;">' + SVG(ic, color) + lbl + '</span>';
             const badges = {
-              pending:  '<span style="background:#f59e0b22;color:#f59e0b;border:1px solid #f59e0b44;padding:2px 8px;border-radius:20px;font-size:11px;font-weight:600;">⏳ Pending</span>',
-              approved: '<span style="background:#22c55e22;color:#22c55e;border:1px solid #22c55e44;padding:2px 8px;border-radius:20px;font-size:11px;font-weight:600;">✅ Approved</span>',
-              rejected: '<span style="background:#ef444422;color:#ef4444;border:1px solid #ef444444;padding:2px 8px;border-radius:20px;font-size:11px;font-weight:600;">❌ Rejected</span>',
+              pending:  make('#f59e0b22', '#f59e0b', clk, 'Pending'),
+              approved: make('#22c55e22', '#22c55e', chk, 'Approved'),
+              rejected: make('#ef444422', '#ef4444', xic, 'Rejected'),
             };
             const el = document.getElementById('cstatus-' + id);
             if (el) el.innerHTML = badges[status];
-          } else { showToast('❌ ' + (d.error || 'Failed'), false); }
+          } else { showToast((d.error || 'Failed'), false); }
         })
-        .catch(() => showToast('❌ Network error', false));
+        .catch(() => showToast('Network error', false));
     }
   <\/script>
 </body>
