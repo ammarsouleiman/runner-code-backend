@@ -745,7 +745,7 @@ app.get('/admin/dashboard', (req, res) => {
         <span class="info-item">${svg(ICONS.calendar, '#666', 12)}${escapeHtml(u.created_at || '—')}</span>
         ${authBadge}
       </div>
-      <button class="btn-icon btn-danger" onclick="deleteUser(${u.id}, '${escapeHtml(u.name).replace(/'/g,"\\'")}')" title="Delete user">
+      <button class="btn-icon btn-danger" onclick="deleteUser(${u.id}, '${escapeHtml(u.name).replace(/'/g,"\\'")}', '${escapeHtml(u.email).replace(/'/g,"\\'")}')" title="Delete user">
         ${svg(ICONS.trash, '#ef4444', 15)}
       </button>
     </div>`;
@@ -792,6 +792,8 @@ app.get('/admin/dashboard', (req, res) => {
   .stat.s-approved .stat-value{color:#22c55e}
   .stat.s-rejected .stat-value{color:#ef4444}
   .stat.s-users .stat-value{color:var(--primary)}
+  .stat{transition:transform .15s ease, border-color .15s}
+  .stat:hover{transform:translateY(-2px);border-color:#333}
   /* Sections */
   .section{display:none}
   .section.active{display:block;animation:fadeIn .25s ease}
@@ -856,6 +858,34 @@ app.get('/admin/dashboard', (req, res) => {
   .toast{position:fixed;bottom:24px;right:24px;background:var(--card);border:1px solid var(--border);padding:12px 18px;border-radius:10px;font-size:13px;display:none;box-shadow:0 10px 30px rgba(0,0,0,.5);z-index:100;max-width:320px}
   .toast.show{display:block;animation:slideIn .2s ease}
   @keyframes slideIn{from{transform:translateX(20px);opacity:0}to{transform:none;opacity:1}}
+  /* Confirm Modal */
+  .modal-overlay{position:fixed;inset:0;background:rgba(0,0,0,.72);backdrop-filter:blur(6px);-webkit-backdrop-filter:blur(6px);display:none;align-items:center;justify-content:center;z-index:200;padding:20px}
+  .modal-overlay.show{display:flex;animation:fadeIn .18s ease}
+  .modal{background:linear-gradient(180deg,#161616,#101010);border:1px solid var(--border);border-radius:20px;padding:0;width:100%;max-width:440px;box-shadow:0 30px 80px rgba(0,0,0,.6), 0 0 0 1px rgba(255,255,255,.03);overflow:hidden;animation:modalIn .22s cubic-bezier(.2,.9,.3,1)}
+  @keyframes modalIn{from{transform:scale(.94) translateY(8px);opacity:0}to{transform:none;opacity:1}}
+  .modal-head{display:flex;align-items:center;gap:14px;padding:22px 24px 14px}
+  .modal-icon{width:48px;height:48px;border-radius:14px;display:flex;align-items:center;justify-content:center;flex-shrink:0}
+  .modal-icon.v-danger{background:linear-gradient(135deg,#ef444422,#ef444408);border:1px solid #ef444433}
+  .modal-icon.v-success{background:linear-gradient(135deg,#22c55e22,#22c55e08);border:1px solid #22c55e33}
+  .modal-icon.v-warn{background:linear-gradient(135deg,#f59e0b22,#f59e0b08);border:1px solid #f59e0b33}
+  .modal-title{font-size:17px;font-weight:800;letter-spacing:-.2px;color:var(--text)}
+  .modal-sub{font-size:12px;color:var(--muted);margin-top:2px}
+  .modal-body{padding:4px 24px 20px;color:#bbb;font-size:13px;line-height:1.6}
+  .modal-target{display:flex;align-items:center;gap:10px;margin-top:14px;padding:12px 14px;background:#0a0a0a;border:1px solid var(--border-soft);border-radius:10px;font-size:12.5px}
+  .modal-target .avatar{width:32px;height:32px;font-size:11px}
+  .modal-target-name{font-weight:700;color:var(--text);font-size:13px}
+  .modal-target-meta{color:var(--muted);font-size:11px;margin-top:1px}
+  .modal-foot{display:flex;gap:10px;padding:16px 24px 20px;background:rgba(255,255,255,.015);border-top:1px solid var(--border-soft)}
+  .modal-btn{flex:1;padding:11px 16px;border-radius:10px;font-size:13px;font-weight:700;cursor:pointer;border:1px solid var(--border);background:transparent;color:var(--text);font-family:inherit;transition:all .15s;display:inline-flex;align-items:center;justify-content:center;gap:6px}
+  .modal-btn:hover{background:var(--card2);border-color:#333}
+  .modal-btn.primary{border:none;color:#fff}
+  .modal-btn.primary.v-danger{background:linear-gradient(135deg,#ef4444,#b91c1c)}
+  .modal-btn.primary.v-danger:hover{background:linear-gradient(135deg,#dc2626,#991b1b);box-shadow:0 8px 20px -8px #ef4444}
+  .modal-btn.primary.v-success{background:linear-gradient(135deg,#22c55e,#15803d)}
+  .modal-btn.primary.v-success:hover{background:linear-gradient(135deg,#16a34a,#14532d);box-shadow:0 8px 20px -8px #22c55e}
+  .modal-btn.primary.v-warn{background:linear-gradient(135deg,#f59e0b,#b45309)}
+  .modal-btn.primary.v-warn:hover{background:linear-gradient(135deg,#d97706,#92400e);box-shadow:0 8px 20px -8px #f59e0b}
+  .modal-btn:disabled{opacity:.6;cursor:not-allowed}
   /* Responsive */
   @media(max-width:960px){
     .layout{grid-template-columns:1fr}
@@ -968,6 +998,25 @@ app.get('/admin/dashboard', (req, res) => {
 </div>
 
 <div class="toast" id="toast"></div>
+<div class="modal-overlay" id="confirmModal" onclick="if(event.target===this)closeConfirm(false)">
+  <div class="modal" role="dialog" aria-modal="true">
+    <div class="modal-head">
+      <div class="modal-icon" id="mIcon"></div>
+      <div>
+        <div class="modal-title" id="mTitle"></div>
+        <div class="modal-sub" id="mSub"></div>
+      </div>
+    </div>
+    <div class="modal-body">
+      <div id="mMessage"></div>
+      <div id="mTarget"></div>
+    </div>
+    <div class="modal-foot">
+      <button class="modal-btn" id="mCancel" onclick="closeConfirm(false)">Cancel</button>
+      <button class="modal-btn primary" id="mOk" onclick="closeConfirm(true)"></button>
+    </div>
+  </div>
+</div>
 <script>
   function showSection(id, btn){
     document.querySelectorAll('.section').forEach(s=>s.classList.remove('active'));
@@ -993,17 +1042,63 @@ app.get('/admin/dashboard', (req, res) => {
     t.classList.add('show');
     setTimeout(()=>t.classList.remove('show'), 3000);
   }
-  function deleteUser(id, name){
-    if(!confirm('Delete account of ' + name + '? This cannot be undone.')) return;
+  // Custom in-app confirm modal (replaces browser confirm)
+  const ICONS_JS = {
+    trash:  \`${svg(ICONS.trash,  '#ef4444', 22)}\`,
+    check:  \`${svg(ICONS.check,  '#22c55e', 22)}\`,
+    x:      \`${svg(ICONS.x,      '#ef4444', 22)}\`,
+    alert:  \`${svg(ICONS.alert,  '#f59e0b', 22)}\`,
+  };
+  let _confirmResolve = null;
+  function showConfirm(opts){
+    return new Promise(resolve => {
+      _confirmResolve = resolve;
+      const v = opts.variant || 'danger';
+      document.getElementById('mIcon').className = 'modal-icon v-' + v;
+      document.getElementById('mIcon').innerHTML = ICONS_JS[opts.icon] || ICONS_JS.alert;
+      document.getElementById('mTitle').textContent = opts.title || 'Are you sure?';
+      document.getElementById('mSub').textContent = opts.subtitle || '';
+      document.getElementById('mMessage').textContent = opts.message || '';
+      document.getElementById('mTarget').innerHTML = opts.targetHtml || '';
+      const ok = document.getElementById('mOk');
+      ok.className = 'modal-btn primary v-' + v;
+      ok.innerHTML = (ICONS_JS[opts.icon] ? ICONS_JS[opts.icon].replace(/width="22" height="22"/,'width="14" height="14"').replace(/stroke="#[a-f0-9]+"/i,'stroke="#fff"') : '') + '<span>' + (opts.confirmText || 'Confirm') + '</span>';
+      document.getElementById('confirmModal').classList.add('show');
+    });
+  }
+  function closeConfirm(result){
+    document.getElementById('confirmModal').classList.remove('show');
+    if(_confirmResolve){ _confirmResolve(result); _confirmResolve = null; }
+  }
+  document.addEventListener('keydown', e => {
+    if(e.key === 'Escape' && document.getElementById('confirmModal').classList.contains('show')){
+      closeConfirm(false);
+    }
+  });
+  async function deleteUser(id, name, email){
+    const initials = String(name||'?').trim().split(/\\s+/).map(p=>p[0]).slice(0,2).join('').toUpperCase() || '?';
+    const targetHtml = '<div class="modal-target"><div class="avatar">' + initials + '</div><div><div class="modal-target-name">' + name + '</div><div class="modal-target-meta">' + (email||'') + '</div></div></div>';
+    const ok = await showConfirm({
+      variant:'danger', icon:'trash',
+      title:'Delete account',
+      subtitle:'This action cannot be undone',
+      message:'All conversations, reactions and data for this user will be permanently removed.',
+      targetHtml,
+      confirmText:'Delete account',
+    });
+    if(!ok) return;
     fetch('/admin/users/'+id, { method:'DELETE', credentials:'include' })
       .then(r=>r.json()).then(d=>{
         if(d.ok){ showToast('Deleted: '+name, true); setTimeout(()=>location.reload(), 500); }
         else showToast(d.error || 'Failed', false);
       }).catch(()=>showToast('Network error', false));
   }
-  function setStatus(id, status){
-    const labels = { approved:'Approve', rejected:'Reject' };
-    if(!confirm(labels[status] + ' this message? This is final.')) return;
+  async function setStatus(id, status){
+    const cfg = status === 'approved'
+      ? { variant:'success', icon:'check', title:'Approve message', confirmText:'Approve', message:'Approving this report will mark it as accepted. This decision is final and cannot be changed later.' }
+      : { variant:'danger',  icon:'x',     title:'Reject message',  confirmText:'Reject',  message:'Rejecting this report will mark it as declined. This decision is final and cannot be changed later.' };
+    const ok = await showConfirm({ ...cfg, subtitle:'Final decision' });
+    if(!ok) return;
     fetch('/admin/contact/'+id+'/status', {
       method:'PATCH',
       headers:{'Content-Type':'application/json'},
