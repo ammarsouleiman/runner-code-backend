@@ -712,6 +712,14 @@ app.get('/admin/dashboard', (req, res) => {
     return tb - ta;
   });
 
+  // Orphan messages: user_id missing AND email doesn't match any existing user
+  const userEmails = new Set(users.map(u => u.email.toLowerCase()));
+  const orphanCount = contacts.filter(c => {
+    const hasUser = c.user_id && userMap.has(c.user_id);
+    const hasEmail = c.user_email && userEmails.has(c.user_email.toLowerCase());
+    return !hasUser && !hasEmail;
+  }).length;
+
   // Build user cards
   const userCards = userGroups.map(g => {
     const name = g.user ? g.user.name : g.fallbackName;
@@ -1193,11 +1201,14 @@ app.get('/admin/dashboard', (req, res) => {
       <div class="page-header">
         <div>
           <div class="page-title">Contact Messages</div>
-          <div class="page-sub">${userGroups.length} user${userGroups.length === 1 ? '' : 's'} · ${contacts.length} message${contacts.length === 1 ? '' : 's'}</div>
+          <div class="page-sub">${userGroups.length} user${userGroups.length === 1 ? '' : 's'} · ${contacts.length} message${contacts.length === 1 ? '' : 's'}${orphanCount ? ` · <span style="color:#f59e0b;font-weight:700">${orphanCount} orphan${orphanCount === 1 ? '' : 's'}</span>` : ''}</div>
         </div>
-        <div class="search-wrap">
-          <span class="search-icon">${svg(ICONS.search, '#555', 15)}</span>
-          <input class="search-input" id="msgSearch" placeholder="Search by name or email…" oninput="filterCards('msgSearch','.user-card')">
+        <div style="display:flex;gap:10px;align-items:center;flex-wrap:wrap">
+          ${orphanCount ? `<button class="panel-action" style="border-color:#f59e0b55;color:#f59e0b" onclick="cleanupOrphans(${orphanCount})">${svg(ICONS.trash, '#f59e0b', 12)} Clean ${orphanCount} orphan${orphanCount === 1 ? '' : 's'}</button>` : ''}
+          <div class="search-wrap">
+            <span class="search-icon">${svg(ICONS.search, '#555', 15)}</span>
+            <input class="search-input" id="msgSearch" placeholder="Search by name or email…" oninput="filterCards('msgSearch','.user-card')">
+          </div>
         </div>
       </div>
       ${userCards || `<div class="empty">${svg(ICONS.inbox, '#333', 48)}<div class="empty-icon"></div><p>No messages yet</p></div>`}
@@ -1344,6 +1355,21 @@ app.get('/admin/dashboard', (req, res) => {
     fetch('/admin/logout', { method:'POST', credentials:'include' })
       .then(()=>location.href='/admin');
   }
+  async function cleanupOrphans(count){
+    const ok = await showConfirm({
+      variant:'warn', icon:'alert',
+      title:'Clean orphan messages',
+      subtitle:'Remove messages from deleted accounts',
+      message:'This will permanently delete ' + count + ' message' + (count===1?'':'s') + ' that belong to users who no longer exist. This cannot be undone.',
+      confirmText:'Clean ' + count,
+    });
+    if(!ok) return;
+    fetch('/admin/contact/cleanup-orphans', { method:'POST', credentials:'include' })
+      .then(r=>r.json()).then(d=>{
+        if(d.ok){ showToast('Removed ' + d.removed + ' orphan message(s)', true); setTimeout(()=>location.reload(), 700); }
+        else showToast(d.error || 'Failed', false);
+      }).catch(()=>showToast('Network error', false));
+  }
 </script>
 </body></html>`);
 });
@@ -1427,6 +1453,28 @@ app.patch('/admin/contact/:id/status', requireAdmin, (req, res) => {
     res.json({ ok: true, status });
   } catch (err) {
     res.status(500).json({ error: err.message || 'Failed to update' });
+  }
+});
+
+// ── POST /admin/contact/cleanup-orphans ─────────────────────────────────────
+// Deletes contact_messages whose owner no longer exists in users table.
+// A message is orphan when BOTH:
+//   - user_id is NULL or points to a non-existent user, AND
+//   - user_email does not match any existing user's email
+app.post('/admin/contact/cleanup-orphans', requireAdmin, (req, res) => {
+  try {
+    const before = db.prepare('SELECT COUNT(*) AS n FROM contact_messages').get().n;
+    const info = db.prepare(`
+      DELETE FROM contact_messages
+      WHERE (user_id IS NULL OR user_id NOT IN (SELECT id FROM users))
+        AND (user_email IS NULL OR LOWER(user_email) NOT IN (SELECT LOWER(email) FROM users))
+    `).run();
+    const after = db.prepare('SELECT COUNT(*) AS n FROM contact_messages').get().n;
+    console.log(`🧹 Admin cleaned ${info.changes} orphan contact message(s) (${before} → ${after})`);
+    res.json({ ok: true, removed: info.changes, before, after });
+  } catch (err) {
+    console.error('Cleanup orphans error:', err.message);
+    res.status(500).json({ error: err.message || 'Failed to cleanup' });
   }
 });
 
