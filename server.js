@@ -348,7 +348,14 @@ app.delete('/api/auth/account', verifyToken, (req, res) => {
   if (!user) {
     return res.status(404).json({ error: 'User not found' });
   }
-  db.prepare('DELETE FROM users WHERE id = ?').run(req.user.id);
+  // Cascade: remove related data
+  try { db.prepare('DELETE FROM message_media WHERE user_id = ?').run(user.id); } catch {}
+  try { db.prepare('DELETE FROM reactions WHERE user_id = ?').run(user.id); } catch {}
+  try { db.prepare('DELETE FROM conversations WHERE user_id = ?').run(user.id); } catch {}
+  try {
+    db.prepare('DELETE FROM contact_messages WHERE user_id = ? OR (user_id IS NULL AND user_email = ?)').run(user.id, user.email);
+  } catch {}
+  db.prepare('DELETE FROM users WHERE id = ?').run(user.id);
   console.log(`🗑️  Account deleted (id=${user.id})`);
   res.json({ message: 'Account deleted successfully' });
 });
@@ -1388,12 +1395,13 @@ app.get('/api/contact/my', verifyToken, (req, res) => {
 app.delete('/admin/users/:id', requireAdmin, (req, res) => {
   const id = parseInt(req.params.id, 10);
   if (!id) return res.status(400).json({ error: 'Invalid id' });
-  const user = db.prepare('SELECT id FROM users WHERE id = ?').get(id);
+  const user = db.prepare('SELECT id, email FROM users WHERE id = ?').get(id);
   if (!user) return res.status(404).json({ error: 'User not found' });
   try {
     db.prepare('DELETE FROM message_media WHERE user_id = ?').run(id);
     db.prepare('DELETE FROM reactions WHERE user_id = ?').run(id);
     db.prepare('DELETE FROM conversations WHERE user_id = ?').run(id);
+    db.prepare('DELETE FROM contact_messages WHERE user_id = ? OR (user_id IS NULL AND user_email = ?)').run(id, user.email);
     db.prepare('DELETE FROM users WHERE id = ?').run(id);
     console.log(`🗑️  Admin deleted user (id=${id})`);
     res.json({ ok: true });
