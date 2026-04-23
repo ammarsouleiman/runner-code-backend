@@ -84,6 +84,8 @@ db.exec(`
 // ── Migrations ────────────────────────────────────────────────────────────────
 db.pragma('foreign_keys = ON');
 try { db.exec('ALTER TABLE users ADD COLUMN google_id TEXT'); } catch {}
+try { db.exec("ALTER TABLE contact_messages ADD COLUMN user_id INTEGER"); } catch {}
+try { db.exec("ALTER TABLE contact_messages ADD COLUMN status TEXT NOT NULL DEFAULT 'pending'"); } catch {}
 
 // ── Middleware ────────────────────────────────────────────────────────────────
 const ALLOWED_ORIGINS = [
@@ -492,9 +494,14 @@ app.get('/admin/users', (req, res) => {
     return res.status(401).send('Unauthorized');
   }
   const users = db.prepare('SELECT id, name, email, country, password_hash, google_id, created_at FROM users ORDER BY created_at DESC').all();
-  const contacts = db.prepare('SELECT id, type, subject, message, user_name, user_email, created_at FROM contact_messages ORDER BY created_at DESC').all();
+  const contacts = db.prepare('SELECT id, type, subject, message, user_name, user_email, status, created_at FROM contact_messages ORDER BY created_at DESC').all();
   const key = encodeURIComponent(req.query.key);
   const typeEmoji = { bug: '🐛', suggestion: '💡', request: '🔧', other: '💬' };
+  const statusBadge = {
+    pending:  '<span style="background:#f59e0b22;color:#f59e0b;border:1px solid #f59e0b44;padding:2px 8px;border-radius:20px;font-size:11px;font-weight:600;">⏳ Pending</span>',
+    approved: '<span style="background:#22c55e22;color:#22c55e;border:1px solid #22c55e44;padding:2px 8px;border-radius:20px;font-size:11px;font-weight:600;">✅ Approved</span>',
+    rejected: '<span style="background:#ef444422;color:#ef4444;border:1px solid #ef444444;padding:2px 8px;border-radius:20px;font-size:11px;font-weight:600;">❌ Rejected</span>',
+  };
   const userRows = users.map(u => {
     const hasRealPassword = u.password_hash && u.password_hash !== 'GOOGLE_AUTH' && u.password_hash.startsWith('$2');
     let authType;
@@ -518,17 +525,18 @@ app.get('/admin/users', (req, res) => {
     </tr>`;
   }).join('');
   const contactRows = contacts.map(c => `
-    <tr>
+    <tr id="crow-${c.id}">
       <td>${c.id}</td>
       <td>${typeEmoji[c.type] || '💬'} ${escapeHtml(c.type)}</td>
       <td><strong>${escapeHtml(c.subject)}</strong></td>
-      <td style="max-width:340px;white-space:pre-wrap;word-break:break-word;">${escapeHtml(c.message)}</td>
+      <td style="max-width:300px;white-space:pre-wrap;word-break:break-word;">${escapeHtml(c.message)}</td>
       <td>${escapeHtml(c.user_name)}<br><small style="color:#888">${escapeHtml(c.user_email)}</small></td>
+      <td id="cstatus-${c.id}">${statusBadge[c.status] || statusBadge.pending}</td>
       <td>${escapeHtml(c.created_at || '—')}</td>
-      <td>
-        <button onclick="deleteContact(${c.id})" 
-          style="background:#555;color:#fff;border:none;padding:4px 10px;border-radius:6px;cursor:pointer;font-size:12px;"
-        >Delete</button>
+      <td style="white-space:nowrap;display:flex;gap:4px;flex-wrap:wrap;">
+        <button onclick="setStatus(${c.id},'approved')" style="background:#22c55e;color:#fff;border:none;padding:4px 8px;border-radius:6px;cursor:pointer;font-size:11px;">✅ Approve</button>
+        <button onclick="setStatus(${c.id},'rejected')" style="background:#ef4444;color:#fff;border:none;padding:4px 8px;border-radius:6px;cursor:pointer;font-size:11px;">❌ Reject</button>
+        <button onclick="deleteContact(${c.id})" style="background:#555;color:#fff;border:none;padding:4px 8px;border-radius:6px;cursor:pointer;font-size:11px;">🗑️</button>
       </td>
     </tr>`).join('');
   res.send(`<!DOCTYPE html>
@@ -562,8 +570,8 @@ app.get('/admin/users', (req, res) => {
   <h2>📩 Contact Messages</h2>
   <p class="section-label">Total: <strong>${contacts.length}</strong> message${contacts.length !== 1 ? 's' : ''}</p>
   <table>
-    <thead><tr><th>#</th><th>Type</th><th>Subject</th><th>Message</th><th>From</th><th>Sent At</th><th>Action</th></tr></thead>
-    <tbody id="ctbody">${contactRows || '<tr><td colspan="7" style="color:#555;text-align:center">No messages yet</td></tr>'}</tbody>
+    <thead><tr><th>#</th><th>Type</th><th>Subject</th><th>Message</th><th>From</th><th>Status</th><th>Sent At</th><th>Actions</th></tr></thead>
+    <tbody id="ctbody">${contactRows || '<tr><td colspan="8" style="color:#555;text-align:center">No messages yet</td></tr>'}</tbody>
   </table>
 
   <div class="toast" id="toast"></div>
@@ -597,8 +605,31 @@ app.get('/admin/users', (req, res) => {
           if (d.ok) {
             showToast('✅ Message deleted', true);
             document.querySelectorAll('#ctbody tr').forEach(tr => {
-              if (tr.innerHTML.includes('deleteContact(' + id + ')')) tr.remove();
+              if (tr.id === 'crow-' + id) tr.remove();
             });
+          } else { showToast('❌ ' + (d.error || 'Failed'), false); }
+        })
+        .catch(() => showToast('❌ Network error', false));
+    }
+    function setStatus(id, status) {
+      const labels = { approved: 'Approve', rejected: 'Reject' };
+      if (!confirm(labels[status] + ' this message?')) return;
+      fetch('/admin/contact/' + id + '/status?key=${key}', {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ status })
+      })
+        .then(r => r.json())
+        .then(d => {
+          if (d.ok) {
+            showToast('✅ Status updated to: ' + status, true);
+            const badges = {
+              pending:  '<span style="background:#f59e0b22;color:#f59e0b;border:1px solid #f59e0b44;padding:2px 8px;border-radius:20px;font-size:11px;font-weight:600;">⏳ Pending</span>',
+              approved: '<span style="background:#22c55e22;color:#22c55e;border:1px solid #22c55e44;padding:2px 8px;border-radius:20px;font-size:11px;font-weight:600;">✅ Approved</span>',
+              rejected: '<span style="background:#ef444422;color:#ef4444;border:1px solid #ef444444;padding:2px 8px;border-radius:20px;font-size:11px;font-weight:600;">❌ Rejected</span>',
+            };
+            const el = document.getElementById('cstatus-' + id);
+            if (el) el.innerHTML = badges[status];
           } else { showToast('❌ ' + (d.error || 'Failed'), false); }
         })
         .catch(() => showToast('❌ Network error', false));
@@ -609,27 +640,41 @@ app.get('/admin/users', (req, res) => {
 });
 
 // ── POST /api/contact ────────────────────────────────────────────────────────
-app.post('/api/contact', (req, res) => {
-  const { type, subject, message, userName, userEmail } = req.body;
+app.post('/api/contact', verifyToken, (req, res) => {
+  const { type, subject, message } = req.body;
   const allowedTypes = ['bug', 'suggestion', 'request', 'other'];
   if (!type || !allowedTypes.includes(type)) return res.status(400).json({ error: 'Invalid type' });
   if (!subject || typeof subject !== 'string' || subject.trim().length < 2) return res.status(400).json({ error: 'Subject too short' });
   if (!message || typeof message !== 'string' || message.trim().length < 10) return res.status(400).json({ error: 'Message too short' });
   try {
     db.prepare(
-      'INSERT INTO contact_messages (type, subject, message, user_name, user_email) VALUES (?, ?, ?, ?, ?)'
+      'INSERT INTO contact_messages (type, subject, message, user_name, user_email, user_id, status) VALUES (?, ?, ?, ?, ?, ?, ?)'
     ).run(
       type,
       subject.trim().slice(0, 200),
       message.trim().slice(0, 3000),
-      String(userName || 'Unknown').slice(0, 100),
-      String(userEmail || 'Unknown').slice(0, 200)
+      String(req.user.name || 'Unknown').slice(0, 100),
+      String(req.user.email || 'Unknown').slice(0, 200),
+      req.user.id,
+      'pending'
     );
-    console.log(`📩 Contact message received: [${type}] ${subject.trim()} from ${userEmail}`);
+    console.log(`📩 Contact message received: [${type}] ${subject.trim()} from ${req.user.email}`);
     res.json({ ok: true });
   } catch (err) {
     console.error('Contact insert error:', err.message);
     res.status(500).json({ error: 'Failed to save message' });
+  }
+});
+
+// ── GET /api/contact/my ───────────────────────────────────────────────────────
+app.get('/api/contact/my', verifyToken, (req, res) => {
+  try {
+    const rows = db.prepare(
+      'SELECT id, type, subject, status, created_at FROM contact_messages WHERE user_id = ? ORDER BY created_at DESC'
+    ).all(req.user.id);
+    res.json(rows);
+  } catch (err) {
+    res.status(500).json({ error: 'Failed to load' });
   }
 });
 
@@ -653,6 +698,25 @@ app.delete('/admin/users/:id', (req, res) => {
   } catch (err) {
     console.error('Admin delete error:', err.message, err.stack);
     res.status(500).json({ error: err.message || 'Failed to delete user' });
+  }
+});
+
+// ── PATCH /admin/contact/:id/status ─────────────────────────────────────────
+app.patch('/admin/contact/:id/status', (req, res) => {
+  const adminKey = process.env.ADMIN_KEY;
+  if (!adminKey || req.query.key !== adminKey) {
+    return res.status(401).json({ error: 'Unauthorized' });
+  }
+  const id = parseInt(req.params.id, 10);
+  const { status } = req.body;
+  if (!id) return res.status(400).json({ error: 'Invalid id' });
+  if (!['pending', 'approved', 'rejected'].includes(status)) return res.status(400).json({ error: 'Invalid status' });
+  try {
+    const info = db.prepare('UPDATE contact_messages SET status = ? WHERE id = ?').run(status, id);
+    if (info.changes === 0) return res.status(404).json({ error: 'Message not found' });
+    res.json({ ok: true, status });
+  } catch (err) {
+    res.status(500).json({ error: err.message || 'Failed to update' });
   }
 });
 
