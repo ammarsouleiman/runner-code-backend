@@ -68,7 +68,17 @@ db.exec(`
     pdf_url    TEXT,
     PRIMARY KEY (message_id, user_id),
     FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
-  )
+  );
+
+  CREATE TABLE IF NOT EXISTS contact_messages (
+    id         INTEGER PRIMARY KEY AUTOINCREMENT,
+    type       TEXT    NOT NULL,
+    subject    TEXT    NOT NULL,
+    message    TEXT    NOT NULL,
+    user_name  TEXT    NOT NULL,
+    user_email TEXT    NOT NULL,
+    created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+  );
 `);
 
 // ── Migrations ────────────────────────────────────────────────────────────────
@@ -482,8 +492,10 @@ app.get('/admin/users', (req, res) => {
     return res.status(401).send('Unauthorized');
   }
   const users = db.prepare('SELECT id, name, email, country, password_hash, google_id, created_at FROM users ORDER BY created_at DESC').all();
+  const contacts = db.prepare('SELECT id, type, subject, message, user_name, user_email, created_at FROM contact_messages ORDER BY created_at DESC').all();
   const key = encodeURIComponent(req.query.key);
-  const rows = users.map(u => {
+  const typeEmoji = { bug: '🐛', suggestion: '💡', request: '🔧', other: '💬' };
+  const userRows = users.map(u => {
     const hasRealPassword = u.password_hash && u.password_hash !== 'GOOGLE_AUTH' && u.password_hash.startsWith('$2');
     let authType;
     if (u.google_id && hasRealPassword) authType = '🔵 Google + 🔑 Password';
@@ -505,6 +517,20 @@ app.get('/admin/users', (req, res) => {
       </td>
     </tr>`;
   }).join('');
+  const contactRows = contacts.map(c => `
+    <tr>
+      <td>${c.id}</td>
+      <td>${typeEmoji[c.type] || '💬'} ${escapeHtml(c.type)}</td>
+      <td><strong>${escapeHtml(c.subject)}</strong></td>
+      <td style="max-width:340px;white-space:pre-wrap;word-break:break-word;">${escapeHtml(c.message)}</td>
+      <td>${escapeHtml(c.user_name)}<br><small style="color:#888">${escapeHtml(c.user_email)}</small></td>
+      <td>${escapeHtml(c.created_at || '—')}</td>
+      <td>
+        <button onclick="deleteContact(${c.id})" 
+          style="background:#555;color:#fff;border:none;padding:4px 10px;border-radius:6px;cursor:pointer;font-size:12px;"
+        >Delete</button>
+      </td>
+    </tr>`).join('');
   res.send(`<!DOCTYPE html>
 <html lang="en">
 <head>
@@ -513,21 +539,33 @@ app.get('/admin/users', (req, res) => {
   <style>
     body { font-family: sans-serif; background: #0f0f0f; color: #eee; padding: 32px; }
     h1 { color: #E31E24; margin-bottom: 4px; }
+    h2 { color: #E31E24; margin: 40px 0 8px; font-size: 18px; }
     p  { color: #888; margin-bottom: 24px; }
-    table { width: 100%; border-collapse: collapse; }
+    table { width: 100%; border-collapse: collapse; margin-bottom: 8px; }
     th { background: #1a1a1a; color: #E31E24; padding: 10px 14px; text-align: left; font-size: 13px; }
-    td { padding: 10px 14px; border-bottom: 1px solid #222; font-size: 13px; vertical-align: middle; }
+    td { padding: 10px 14px; border-bottom: 1px solid #222; font-size: 13px; vertical-align: top; }
     tr:hover td { background: #1a1a1a; }
     .toast { position:fixed; bottom:24px; right:24px; background:#1a1a1a; border:1px solid #333; color:#eee; padding:12px 20px; border-radius:10px; font-size:14px; display:none; }
+    .section-label { color:#888; font-size:13px; margin-bottom:20px; }
   </style>
 </head>
 <body>
   <h1>Runner Code — Admin</h1>
-  <p>Total: <strong>${users.length}</strong> user${users.length !== 1 ? 's' : ''}</p>
+
+  <h2>👥 Users</h2>
+  <p class="section-label">Total: <strong>${users.length}</strong> user${users.length !== 1 ? 's' : ''}</p>
   <table>
     <thead><tr><th>#</th><th>Name</th><th>Email</th><th>Country</th><th>Auth</th><th>Registered</th><th>Action</th></tr></thead>
-    <tbody id="tbody">${rows}</tbody>
+    <tbody id="tbody">${userRows}</tbody>
   </table>
+
+  <h2>📩 Contact Messages</h2>
+  <p class="section-label">Total: <strong>${contacts.length}</strong> message${contacts.length !== 1 ? 's' : ''}</p>
+  <table>
+    <thead><tr><th>#</th><th>Type</th><th>Subject</th><th>Message</th><th>From</th><th>Sent At</th><th>Action</th></tr></thead>
+    <tbody id="ctbody">${contactRows || '<tr><td colspan="7" style="color:#555;text-align:center">No messages yet</td></tr>'}</tbody>
+  </table>
+
   <div class="toast" id="toast"></div>
   <script>
     function showToast(msg, ok) {
@@ -543,11 +581,23 @@ app.get('/admin/users', (req, res) => {
         .then(r => r.json())
         .then(d => {
           if (d.ok) {
-            document.querySelector('tr[data-id="' + id + '"]')?.remove();
             showToast('✅ Deleted: ' + name, true);
-            // Remove row by finding button's parent row
-            document.querySelectorAll('tr').forEach(tr => {
+            document.querySelectorAll('#tbody tr').forEach(tr => {
               if (tr.innerHTML.includes('deleteUser(' + id + ',')) tr.remove();
+            });
+          } else { showToast('❌ ' + (d.error || 'Failed'), false); }
+        })
+        .catch(() => showToast('❌ Network error', false));
+    }
+    function deleteContact(id) {
+      if (!confirm('Delete this contact message?')) return;
+      fetch('/admin/contact/' + id + '?key=${key}', { method: 'DELETE' })
+        .then(r => r.json())
+        .then(d => {
+          if (d.ok) {
+            showToast('✅ Message deleted', true);
+            document.querySelectorAll('#ctbody tr').forEach(tr => {
+              if (tr.innerHTML.includes('deleteContact(' + id + ')')) tr.remove();
             });
           } else { showToast('❌ ' + (d.error || 'Failed'), false); }
         })
@@ -556,6 +606,31 @@ app.get('/admin/users', (req, res) => {
   <\/script>
 </body>
 </html>`);
+});
+
+// ── POST /api/contact ────────────────────────────────────────────────────────
+app.post('/api/contact', (req, res) => {
+  const { type, subject, message, userName, userEmail } = req.body;
+  const allowedTypes = ['bug', 'suggestion', 'request', 'other'];
+  if (!type || !allowedTypes.includes(type)) return res.status(400).json({ error: 'Invalid type' });
+  if (!subject || typeof subject !== 'string' || subject.trim().length < 2) return res.status(400).json({ error: 'Subject too short' });
+  if (!message || typeof message !== 'string' || message.trim().length < 10) return res.status(400).json({ error: 'Message too short' });
+  try {
+    db.prepare(
+      'INSERT INTO contact_messages (type, subject, message, user_name, user_email) VALUES (?, ?, ?, ?, ?)'
+    ).run(
+      type,
+      subject.trim().slice(0, 200),
+      message.trim().slice(0, 3000),
+      String(userName || 'Unknown').slice(0, 100),
+      String(userEmail || 'Unknown').slice(0, 200)
+    );
+    console.log(`📩 Contact message received: [${type}] ${subject.trim()} from ${userEmail}`);
+    res.json({ ok: true });
+  } catch (err) {
+    console.error('Contact insert error:', err.message);
+    res.status(500).json({ error: 'Failed to save message' });
+  }
 });
 
 // ── DELETE /admin/users/:id ───────────────────────────────────────────────────
@@ -578,6 +653,23 @@ app.delete('/admin/users/:id', (req, res) => {
   } catch (err) {
     console.error('Admin delete error:', err.message, err.stack);
     res.status(500).json({ error: err.message || 'Failed to delete user' });
+  }
+});
+
+// ── DELETE /admin/contact/:id ─────────────────────────────────────────────────
+app.delete('/admin/contact/:id', (req, res) => {
+  const adminKey = process.env.ADMIN_KEY;
+  if (!adminKey || req.query.key !== adminKey) {
+    return res.status(401).json({ error: 'Unauthorized' });
+  }
+  const id = parseInt(req.params.id, 10);
+  if (!id) return res.status(400).json({ error: 'Invalid id' });
+  try {
+    const info = db.prepare('DELETE FROM contact_messages WHERE id = ?').run(id);
+    if (info.changes === 0) return res.status(404).json({ error: 'Message not found' });
+    res.json({ ok: true });
+  } catch (err) {
+    res.status(500).json({ error: err.message || 'Failed to delete' });
   }
 });
 
