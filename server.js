@@ -1900,6 +1900,26 @@ app.get('/admin/dashboard', (req, res) => {
     </div>
   </div>
 </div>
+<!-- Status picker modal (after reply) -->
+<div class="modal-overlay" id="statusPicker" onclick="if(event.target===this)pickStatus('skip')">
+  <div class="modal" role="dialog" aria-modal="true">
+    <div class="modal-head">
+      <div class="modal-icon v-success">${svg(ICONS.check, '#22c55e', 22)}</div>
+      <div>
+        <div class="modal-title">Reply sent successfully</div>
+        <div class="modal-sub">Set a decision for this message</div>
+      </div>
+    </div>
+    <div class="modal-body">
+      <div>Your reply has been saved. Choose a status for this message now, or skip to decide later.</div>
+    </div>
+    <div class="modal-foot" style="gap:8px">
+      <button class="modal-btn" onclick="pickStatus('skip')" style="flex:1">Skip for now</button>
+      <button class="modal-btn primary v-danger" onclick="pickStatus('rejected')" style="flex:1">${svg(ICONS.x, '#fff', 14)} <span>Reject</span></button>
+      <button class="modal-btn primary v-success" onclick="pickStatus('approved')" style="flex:1">${svg(ICONS.check, '#fff', 14)} <span>Approve</span></button>
+    </div>
+  </div>
+</div>
 <script>
   function showSection(id, btn){
     document.querySelectorAll('.section').forEach(s=>s.classList.remove('active'));
@@ -2049,18 +2069,46 @@ app.get('/admin/dashboard', (req, res) => {
     const el = document.getElementById('replyForm-'+id);
     if(el) el.style.display = el.style.display === 'none' ? 'block' : 'none';
   }
+  var _pickResolve = null;
+  function showStatusPicker(){
+    return new Promise(resolve => {
+      _pickResolve = resolve;
+      document.getElementById('statusPicker').classList.add('show');
+    });
+  }
+  function pickStatus(val){
+    document.getElementById('statusPicker').classList.remove('show');
+    if(_pickResolve){ _pickResolve(val); _pickResolve = null; }
+  }
+  document.addEventListener('keydown', e => {
+    if(e.key === 'Escape' && document.getElementById('statusPicker').classList.contains('show')){
+      pickStatus('skip');
+    }
+  });
   async function sendReply(id){
     const text = document.getElementById('replyText-'+id)?.value?.trim();
     if(!text || text.length < 2){ showToast('Reply too short', false); return; }
-    fetch('/admin/contact/'+id+'/reply', {
-      method:'POST',
-      headers:{'Content-Type':'application/json'},
-      credentials:'include',
-      body: JSON.stringify({ reply: text })
-    }).then(r=>r.json()).then(d=>{
-      if(d.ok){ showToast('Reply sent', true); setTimeout(()=>location.reload(), 500); }
-      else showToast(d.error || 'Failed', false);
-    }).catch(()=>showToast('Network error', false));
+    try {
+      const r = await fetch('/admin/contact/'+id+'/reply', {
+        method:'POST',
+        headers:{'Content-Type':'application/json'},
+        credentials:'include',
+        body: JSON.stringify({ reply: text })
+      });
+      const d = await r.json();
+      if(!d.ok){ showToast(d.error || 'Failed', false); return; }
+      const choice = await showStatusPicker();
+      if(choice === 'approved' || choice === 'rejected'){
+        await fetch('/admin/contact/'+id+'/status', {
+          method:'PATCH', headers:{'Content-Type':'application/json'}, credentials:'include',
+          body: JSON.stringify({ status: choice })
+        });
+        showToast(choice === 'approved' ? 'Approved' : 'Rejected', true);
+      } else {
+        showToast('Reply sent', true);
+      }
+      setTimeout(()=>location.reload(), 500);
+    } catch(e){ showToast('Network error', false); }
   }
   async function deleteConv(id, title){
     const ok = await showConfirm({
