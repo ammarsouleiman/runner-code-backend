@@ -546,6 +546,7 @@ function adminIcons() {
     thumbUp:    '<path d="M7 10v12"/><path d="M15 5.88 14 10h5.83a2 2 0 0 1 1.92 2.56l-2.33 8A2 2 0 0 1 17.5 22H4a2 2 0 0 1-2-2v-8a2 2 0 0 1 2-2h2.76a2 2 0 0 0 1.79-1.11L12 2h0a3.13 3.13 0 0 1 3 3.88Z"/>',
     thumbDown:  '<path d="M17 14V2"/><path d="M9 18.12 10 14H4.17a2 2 0 0 1-1.92-2.56l2.33-8A2 2 0 0 1 6.5 2H20a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2h-2.76a2 2 0 0 0-1.79 1.11L12 22h0a3.13 3.13 0 0 1-3-3.88Z"/>',
     star:       '<polygon points="12 2 15.09 8.26 22 9.27 17 14.14 18.18 21.02 12 17.77 5.82 21.02 7 14.14 2 9.27 8.91 8.26 12 2"/>',
+    refresh:    '<path d="M21 12a9 9 0 1 1-9-9c2.52 0 4.93 1 6.74 2.74L21 8"/><path d="M21 3v5h-5"/>',
   };
   return { svg, ICONS };
 }
@@ -1135,6 +1136,11 @@ app.get('/admin/dashboard', (req, res) => {
   .qa-btn:hover{border-color:var(--primary);color:var(--primary);background:rgba(227,30,36,.05);transform:translateY(-1px)}
   .qa-count{background:#262626;color:var(--muted);padding:2px 7px;border-radius:8px;font-size:10px;font-weight:700;margin-left:2px}
   .qa-btn:hover .qa-count{background:rgba(227,30,36,.15);color:var(--primary)}
+  .qa-btn.qa-refresh{background:linear-gradient(135deg,var(--primary),#b91c22);color:#fff;border-color:transparent}
+  .qa-btn.qa-refresh:hover{background:linear-gradient(135deg,#ff2a30,var(--primary));transform:translateY(-1px);box-shadow:0 4px 16px rgba(227,30,36,.35)}
+  .qa-btn.qa-refresh .qa-spin{display:inline-block;animation:none}
+  .qa-btn.qa-refresh.spinning .qa-spin{animation:spin .6s linear infinite}
+  @keyframes spin{from{transform:rotate(0deg)}to{transform:rotate(360deg)}}
   /* Top users */
   .top-user-row{display:flex;align-items:center;gap:10px;padding:10px 0}
   .top-user-row + .top-user-row{border-top:1px solid var(--border-soft)}
@@ -1452,6 +1458,7 @@ app.get('/admin/dashboard', (req, res) => {
 
       <!-- Quick actions -->
       <div class="quick-actions">
+        <button class="qa-btn qa-refresh" onclick="refreshDashboard(this)"><span class="qa-spin">${svg(ICONS.refresh, '#fff', 16)}</span><span>Refresh dashboard</span></button>
         <button class="qa-btn" onclick="showSection('messages', document.querySelector('[data-section=messages]'))">${svg(ICONS.inbox, 'currentColor', 16)}<span>Review messages</span><span class="qa-count">${pendingCount}</span></button>
         <button class="qa-btn" onclick="showSection('users', document.querySelector('[data-section=users]'))">${svg(ICONS.users, 'currentColor', 16)}<span>Manage users</span><span class="qa-count">${users.length}</span></button>
         <button class="qa-btn" onclick="showSection('conversations', document.querySelector('[data-section=conversations]'))">${svg(ICONS.msgCircle, 'currentColor', 16)}<span>View conversations</span><span class="qa-count">${totalConvs}</span></button>
@@ -1891,7 +1898,16 @@ app.get('/admin/dashboard', (req, res) => {
     document.getElementById('sec-'+id).classList.add('active');
     document.querySelectorAll('.nav-item').forEach(b=>b.classList.remove('active'));
     btn.classList.add('active');
+    sessionStorage.setItem('admin_section', id);
   }
+  // Restore last active section on load
+  (function(){
+    const saved = sessionStorage.getItem('admin_section');
+    if(saved && document.getElementById('sec-'+saved)){
+      const btn = document.querySelector('.nav-item[data-section="'+saved+'"]');
+      if(btn) showSection(saved, btn);
+    }
+  })();
   function toggleUser(id){
     const card = document.getElementById('body-'+id)?.closest('.user-card');
     if(card) card.classList.toggle('open');
@@ -2140,8 +2156,13 @@ app.get('/admin/dashboard', (req, res) => {
   const pendingN = ${pendingCount};
   if(pendingN > 0) document.title = '(' + pendingN + ') Admin Dashboard · Runner Code';
 
-  // ── Auto-refresh every 60s ──
-  setTimeout(()=>location.reload(), 60000);
+  // ── Manual refresh ──
+  function refreshDashboard(btn){
+    btn.classList.add('spinning');
+    const active = document.querySelector('.nav-item.active');
+    if(active) sessionStorage.setItem('admin_section', active.dataset.section);
+    setTimeout(()=>location.reload(), 400);
+  }
 </script>
 </body></html>`);
 });
