@@ -1136,14 +1136,13 @@ app.get('/admin/dashboard', (req, res) => {
   .qa-btn:hover{border-color:var(--primary);color:var(--primary);background:rgba(227,30,36,.05);transform:translateY(-1px)}
   .qa-count{background:#262626;color:var(--muted);padding:2px 7px;border-radius:8px;font-size:10px;font-weight:700;margin-left:2px}
   .qa-btn:hover .qa-count{background:rgba(227,30,36,.15);color:var(--primary)}
-  /* Refresh bar */
-  .refresh-bar{display:flex;justify-content:flex-end;margin-bottom:16px}
-  .refresh-btn{display:inline-flex;align-items:center;gap:8px;padding:9px 20px;background:var(--card);border:1px solid var(--border);border-radius:12px;color:var(--text);font-size:12px;font-weight:700;cursor:pointer;font-family:inherit;transition:all .2s}
-  .refresh-btn:hover{border-color:var(--primary);color:var(--primary);background:rgba(227,30,36,.06);transform:translateY(-1px);box-shadow:0 4px 20px rgba(227,30,36,.12)}
+  /* Refresh button (inline with hero badge) */
+  .hero-top{display:flex;align-items:center;justify-content:space-between;gap:12px}
+  .refresh-btn{display:inline-flex;align-items:center;gap:6px;padding:5px 14px;background:rgba(255,255,255,.05);border:1px solid var(--border);border-radius:12px;color:var(--muted);font-size:11px;font-weight:700;cursor:pointer;font-family:inherit;transition:all .2s;letter-spacing:.3px}
+  .refresh-btn:hover{border-color:var(--primary);color:#fff;background:rgba(227,30,36,.12);transform:translateY(-1px);box-shadow:0 4px 16px rgba(227,30,36,.15)}
   .refresh-btn:active{transform:scale(.97)}
   .refresh-btn .r-icon{display:inline-flex;transition:transform .3s}
   .refresh-btn.spinning .r-icon{animation:spin .6s linear infinite}
-  .refresh-btn .r-text{transition:opacity .15s}
   @keyframes spin{from{transform:rotate(0deg)}to{transform:rotate(360deg)}}
   /* Top users */
   .top-user-row{display:flex;align-items:center;gap:10px;padding:10px 0}
@@ -1393,18 +1392,17 @@ app.get('/admin/dashboard', (req, res) => {
   <main class="main">
     <!-- Overview -->
     <section class="section active" id="sec-overview">
-      <!-- Refresh bar -->
-      <div class="refresh-bar">
-        <button class="refresh-btn" onclick="refreshDashboard(this)">
-          <span class="r-icon">${svg(ICONS.refresh, 'currentColor', 15)}</span>
-          <span class="r-text">Refresh</span>
-        </button>
-      </div>
       <!-- Hero -->
       <div class="hero">
         <div class="hero-bg"></div>
         <div class="hero-content">
-          <div class="hero-badge"><span class="live-dot"></span> Live dashboard</div>
+          <div class="hero-top">
+            <div class="hero-badge"><span class="live-dot"></span> Live dashboard</div>
+            <button class="refresh-btn" onclick="refreshDashboard(this)">
+              <span class="r-icon">${svg(ICONS.refresh, 'currentColor', 13)}</span>
+              <span>Refresh</span>
+            </button>
+          </div>
           <h1 class="hero-title">Welcome back, Admin</h1>
           <p class="hero-sub">Here's what's happening across Runner Code today.</p>
           <div class="hero-meta">
