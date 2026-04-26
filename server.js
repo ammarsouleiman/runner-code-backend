@@ -1136,10 +1136,14 @@ app.get('/admin/dashboard', (req, res) => {
   .qa-btn:hover{border-color:var(--primary);color:var(--primary);background:rgba(227,30,36,.05);transform:translateY(-1px)}
   .qa-count{background:#262626;color:var(--muted);padding:2px 7px;border-radius:8px;font-size:10px;font-weight:700;margin-left:2px}
   .qa-btn:hover .qa-count{background:rgba(227,30,36,.15);color:var(--primary)}
-  .qa-btn.qa-refresh{background:linear-gradient(135deg,var(--primary),#b91c22);color:#fff;border-color:transparent}
-  .qa-btn.qa-refresh:hover{background:linear-gradient(135deg,#ff2a30,var(--primary));transform:translateY(-1px);box-shadow:0 4px 16px rgba(227,30,36,.35)}
-  .qa-btn.qa-refresh .qa-spin{display:inline-block;animation:none}
-  .qa-btn.qa-refresh.spinning .qa-spin{animation:spin .6s linear infinite}
+  /* Refresh bar */
+  .refresh-bar{display:flex;justify-content:flex-end;margin-bottom:16px}
+  .refresh-btn{display:inline-flex;align-items:center;gap:8px;padding:9px 20px;background:var(--card);border:1px solid var(--border);border-radius:12px;color:var(--text);font-size:12px;font-weight:700;cursor:pointer;font-family:inherit;transition:all .2s}
+  .refresh-btn:hover{border-color:var(--primary);color:var(--primary);background:rgba(227,30,36,.06);transform:translateY(-1px);box-shadow:0 4px 20px rgba(227,30,36,.12)}
+  .refresh-btn:active{transform:scale(.97)}
+  .refresh-btn .r-icon{display:inline-flex;transition:transform .3s}
+  .refresh-btn.spinning .r-icon{animation:spin .6s linear infinite}
+  .refresh-btn .r-text{transition:opacity .15s}
   @keyframes spin{from{transform:rotate(0deg)}to{transform:rotate(360deg)}}
   /* Top users */
   .top-user-row{display:flex;align-items:center;gap:10px;padding:10px 0}
@@ -1389,6 +1393,13 @@ app.get('/admin/dashboard', (req, res) => {
   <main class="main">
     <!-- Overview -->
     <section class="section active" id="sec-overview">
+      <!-- Refresh bar -->
+      <div class="refresh-bar">
+        <button class="refresh-btn" onclick="refreshDashboard(this)">
+          <span class="r-icon">${svg(ICONS.refresh, 'currentColor', 15)}</span>
+          <span class="r-text">Refresh</span>
+        </button>
+      </div>
       <!-- Hero -->
       <div class="hero">
         <div class="hero-bg"></div>
@@ -1458,7 +1469,6 @@ app.get('/admin/dashboard', (req, res) => {
 
       <!-- Quick actions -->
       <div class="quick-actions">
-        <button class="qa-btn qa-refresh" onclick="refreshDashboard(this)"><span class="qa-spin">${svg(ICONS.refresh, '#fff', 16)}</span><span>Refresh dashboard</span></button>
         <button class="qa-btn" onclick="showSection('messages', document.querySelector('[data-section=messages]'))">${svg(ICONS.inbox, 'currentColor', 16)}<span>Review messages</span><span class="qa-count">${pendingCount}</span></button>
         <button class="qa-btn" onclick="showSection('users', document.querySelector('[data-section=users]'))">${svg(ICONS.users, 'currentColor', 16)}<span>Manage users</span><span class="qa-count">${users.length}</span></button>
         <button class="qa-btn" onclick="showSection('conversations', document.querySelector('[data-section=conversations]'))">${svg(ICONS.msgCircle, 'currentColor', 16)}<span>View conversations</span><span class="qa-count">${totalConvs}</span></button>
