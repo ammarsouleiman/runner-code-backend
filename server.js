@@ -1100,6 +1100,13 @@ app.get('/admin/dashboard', (req, res) => {
     .main{padding:20px}
     .user-row{flex-wrap:wrap}
     .urow-info{width:100%;order:3}
+    .urow-actions{width:100%;order:4;justify-content:flex-end}
+    .conv-row{flex-wrap:wrap;padding:12px 14px;gap:10px}
+    .conv-row .avatar{display:none}
+    .conv-main{width:100%;order:1}
+    .conv-title{white-space:normal;display:flex}
+    .conv-info{width:100%;order:2;gap:8px}
+    .conv-row .btn-icon{order:3;margin-left:auto}
     .search-wrap{width:100%}
     .page-header{flex-direction:column;align-items:stretch}
   }
