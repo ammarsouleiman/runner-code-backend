@@ -543,6 +543,9 @@ function adminIcons() {
     unlock:     '<rect x="3" y="11" width="18" height="11" rx="2" ry="2"/><path d="M7 11V7a5 5 0 0 1 9.9-1"/>',
     msgCircle:  '<path d="M21 11.5a8.38 8.38 0 0 1-.9 3.8 8.5 8.5 0 0 1-7.6 4.7 8.38 8.38 0 0 1-3.8-.9L3 21l1.9-5.7a8.38 8.38 0 0 1-.9-3.8 8.5 8.5 0 0 1 4.7-7.6 8.38 8.38 0 0 1 3.8-.9h.5a8.48 8.48 0 0 1 8 8v.5z"/>',
     send:       '<line x1="22" y1="2" x2="11" y2="13"/><polygon points="22 2 15 22 11 13 2 9 22 2"/>',
+    thumbUp:    '<path d="M7 10v12"/><path d="M15 5.88 14 10h5.83a2 2 0 0 1 1.92 2.56l-2.33 8A2 2 0 0 1 17.5 22H4a2 2 0 0 1-2-2v-8a2 2 0 0 1 2-2h2.76a2 2 0 0 0 1.79-1.11L12 2h0a3.13 3.13 0 0 1 3 3.88Z"/>',
+    thumbDown:  '<path d="M17 14V2"/><path d="M9 18.12 10 14H4.17a2 2 0 0 1-1.92-2.56l2.33-8A2 2 0 0 1 6.5 2H20a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2h-2.76a2 2 0 0 0-1.79 1.11L12 22h0a3.13 3.13 0 0 1-3-3.88Z"/>',
+    star:       '<polygon points="12 2 15.09 8.26 22 9.27 17 14.14 18.18 21.02 12 17.77 5.82 21.02 7 14.14 2 9.27 8.91 8.26 12 2"/>',
   };
   return { svg, ICONS };
 }
@@ -706,6 +709,43 @@ app.get('/admin/dashboard', (req, res) => {
   // DB file size
   let dbSizeStr = '—';
   try { const fs = require('fs'); const sz = fs.statSync(db.name).size; dbSizeStr = sz < 1048576 ? (sz / 1024).toFixed(1) + ' KB' : (sz / 1048576).toFixed(1) + ' MB'; } catch {}
+
+  // Feedback / Reactions data
+  const allReactions = db.prepare(`
+    SELECT r.user_id, r.message_id, r.conversation_id, r.reaction,
+           u.name AS user_name, u.email AS user_email,
+           c.title AS conv_title
+    FROM reactions r
+    LEFT JOIN users u ON u.id = r.user_id
+    LEFT JOIN conversations c ON c.id = r.conversation_id
+    ORDER BY r.rowid DESC
+  `).all();
+  const totalReactions = allReactions.length;
+  const thumbsUp = allReactions.filter(r => r.reaction === 'up').length;
+  const thumbsDown = allReactions.filter(r => r.reaction === 'down').length;
+  const satisfactionRate = totalReactions ? Math.round((thumbsUp / totalReactions) * 100) : 0;
+
+  // Top feedback users
+  const feedbackUserMap = {};
+  allReactions.forEach(r => {
+    if (!feedbackUserMap[r.user_id]) feedbackUserMap[r.user_id] = { name: r.user_name || 'Unknown', email: r.user_email || '—', up: 0, down: 0, total: 0 };
+    feedbackUserMap[r.user_id][r.reaction === 'up' ? 'up' : 'down']++;
+    feedbackUserMap[r.user_id].total++;
+  });
+  const topFeedbackUsers = Object.values(feedbackUserMap).sort((a, b) => b.total - a.total).slice(0, 8);
+
+  // Feedback by conversation (top 10)
+  const feedbackConvMap = {};
+  allReactions.forEach(r => {
+    const key = r.conversation_id;
+    if (!feedbackConvMap[key]) feedbackConvMap[key] = { title: r.conv_title || 'Untitled', up: 0, down: 0, total: 0 };
+    feedbackConvMap[key][r.reaction === 'up' ? 'up' : 'down']++;
+    feedbackConvMap[key].total++;
+  });
+  const topFeedbackConvs = Object.entries(feedbackConvMap).sort((a, b) => b[1].total - a[1].total).slice(0, 10);
+
+  // Recent feedback (last 15)
+  const recentFeedback = allReactions.slice(0, 15);
 
   // Recent activity
   const recentContacts = [...contacts]
@@ -1112,6 +1152,51 @@ app.get('/admin/dashboard', (req, res) => {
   .sys-item:nth-last-child(-n+2){border-bottom:none}
   .sys-label{display:inline-flex;align-items:center;gap:6px;color:var(--muted);font-size:11px;font-weight:600}
   .sys-value{font-size:14px;font-weight:800;color:var(--text)}
+  /* Feedback section */
+  .sc-feedback::before{background:linear-gradient(90deg,#f59e0b,#d97706)}
+  .sc-feedback .sc-icon{background:linear-gradient(135deg,#f59e0b,#d97706)}
+  .fb-hero{background:var(--card);border:1px solid var(--border);border-radius:20px;padding:28px;margin-bottom:24px;display:grid;grid-template-columns:1fr 1fr;gap:28px;align-items:center}
+  .fb-hero-main{text-align:center}
+  .fb-rate{font-size:64px;font-weight:900;letter-spacing:-2px;background:linear-gradient(135deg,#22c55e,#4ade80);-webkit-background-clip:text;background-clip:text;-webkit-text-fill-color:transparent}
+  .fb-rate span{font-size:28px;margin-left:2px}
+  .fb-rate-label{color:var(--muted);font-size:13px;font-weight:700;text-transform:uppercase;letter-spacing:1.5px;margin-top:4px}
+  .fb-rate-bar{height:8px;background:rgba(255,255,255,.06);border-radius:8px;margin-top:14px;overflow:hidden;max-width:260px;margin-left:auto;margin-right:auto}
+  .fb-rate-fill{height:100%;border-radius:8px;transition:width .6s cubic-bezier(.2,.8,.2,1)}
+  .fb-summary{display:flex;gap:16px;justify-content:center;flex-wrap:wrap}
+  .fb-stat{display:flex;align-items:center;gap:12px;padding:14px 18px;background:#0f0f0f;border:1px solid var(--border-soft);border-radius:14px;min-width:130px}
+  .fb-stat-icon{width:40px;height:40px;border-radius:12px;display:flex;align-items:center;justify-content:center}
+  .fb-up{background:rgba(34,197,94,.12);border:1px solid rgba(34,197,94,.25)}
+  .fb-down{background:rgba(239,68,68,.12);border:1px solid rgba(239,68,68,.25)}
+  .fb-total{background:rgba(245,158,11,.12);border:1px solid rgba(245,158,11,.25)}
+  .fb-stat-val{font-size:22px;font-weight:800;letter-spacing:-.5px;color:var(--text)}
+  .fb-stat-lbl{font-size:11px;color:var(--muted);font-weight:600;margin-top:1px}
+  .fb-user-row{display:flex;align-items:center;justify-content:space-between;padding:10px 0;gap:12px}
+  .fb-user-row + .fb-user-row{border-top:1px solid var(--border-soft)}
+  .fb-user-info{flex:1;min-width:0}
+  .fb-user-name{font-size:13px;font-weight:700;color:var(--text);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+  .fb-user-email{font-size:11px;color:var(--muted);margin-top:1px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+  .fb-user-reactions{display:flex;gap:6px;flex-shrink:0}
+  .fb-pill{display:inline-flex;align-items:center;gap:4px;padding:3px 8px;border-radius:8px;font-size:11px;font-weight:700}
+  .fb-pill-up{background:rgba(34,197,94,.1);color:#22c55e}
+  .fb-pill-down{background:rgba(239,68,68,.1);color:#ef4444}
+  .fb-pill-pct{background:rgba(255,255,255,.04);font-weight:800;font-size:10px}
+  .fb-conv-row{display:flex;align-items:center;justify-content:space-between;padding:10px 0;gap:12px}
+  .fb-conv-row + .fb-conv-row{border-top:1px solid var(--border-soft)}
+  .fb-conv-title{flex:1;min-width:0;display:inline-flex;align-items:center;gap:6px;font-size:12px;font-weight:600;color:var(--text);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+  .fb-conv-title span{overflow:hidden;text-overflow:ellipsis}
+  .fb-conv-stats{display:flex;gap:6px;flex-shrink:0}
+  .fb-recent-row{display:flex;align-items:center;gap:12px;padding:10px 0}
+  .fb-recent-row + .fb-recent-row{border-top:1px solid var(--border-soft)}
+  .fb-react-icon{width:32px;height:32px;border-radius:10px;display:flex;align-items:center;justify-content:center;flex-shrink:0}
+  .fb-react-up{background:rgba(34,197,94,.1);border:1px solid rgba(34,197,94,.2)}
+  .fb-react-down{background:rgba(239,68,68,.1);border:1px solid rgba(239,68,68,.2)}
+  .fb-recent-info{flex:1;min-width:0}
+  .fb-recent-user{font-size:13px;font-weight:700;color:var(--text)}
+  .fb-recent-email{font-weight:400;color:var(--muted);font-size:11px}
+  .fb-recent-conv{font-size:11px;color:var(--muted2);margin-top:2px;display:inline-flex;align-items:center;gap:4px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;max-width:100%}
+  .fb-recent-badge{padding:3px 8px;border-radius:8px;font-size:10px;font-weight:700;text-transform:uppercase;letter-spacing:.5px;flex-shrink:0}
+  .fb-badge-up{background:rgba(34,197,94,.1);color:#22c55e;border:1px solid rgba(34,197,94,.2)}
+  .fb-badge-down{background:rgba(239,68,68,.1);color:#ef4444;border:1px solid rgba(239,68,68,.2)}
   /* Empty state */
   .empty{text-align:center;padding:60px 20px;color:var(--muted2);background:var(--card);border:1px dashed var(--border);border-radius:var(--radius)}
   .empty-icon{opacity:.3;margin-bottom:12px}
@@ -1205,6 +1290,16 @@ app.get('/admin/dashboard', (req, res) => {
     .msg-actions textarea{width:100%}
     .reply-form{gap:8px}
     .modal-box{max-width:92vw;margin:20px;padding:24px}
+    .fb-hero{grid-template-columns:1fr;padding:20px;gap:20px}
+    .fb-rate{font-size:48px}
+    .fb-summary{flex-direction:column;gap:10px}
+    .fb-stat{min-width:0;flex:1}
+    .fb-user-row{flex-wrap:wrap}
+    .fb-user-reactions{width:100%;justify-content:flex-start;margin-top:4px}
+    .fb-conv-row{flex-wrap:wrap}
+    .fb-conv-stats{width:100%;justify-content:flex-start;margin-top:4px}
+    .fb-recent-row{flex-wrap:wrap;gap:8px}
+    .fb-recent-badge{margin-left:auto}
   }
   @media(max-width:480px){
     .stats-grid{grid-template-columns:1fr}
@@ -1245,6 +1340,10 @@ app.get('/admin/dashboard', (req, res) => {
       <button class="nav-item" data-section="conversations" onclick="showSection('conversations',this)">
         ${svg(ICONS.msgCircle, 'currentColor', 16)}<span>Conversations</span>
         <span class="nav-badge">${totalConvs}</span>
+      </button>
+      <button class="nav-item" data-section="feedback" onclick="showSection('feedback',this)">
+        ${svg(ICONS.thumbUp, 'currentColor', 16)}<span>Feedback</span>
+        <span class="nav-badge">${totalReactions}</span>
       </button>
     </nav>
     <button class="logout-btn" onclick="logout()">
@@ -1313,6 +1412,12 @@ app.get('/admin/dashboard', (req, res) => {
           <div class="sc-label">Rejected</div>
           <div class="sc-value">${rejectedCount}</div>
           <div class="sc-delta down">${pct(rejectedCount)}% of total</div>
+        </div>
+        <div class="stat-card sc-feedback">
+          <div class="sc-icon">${svg(ICONS.thumbUp, '#fff', 20)}</div>
+          <div class="sc-label">AI Feedback</div>
+          <div class="sc-value">${totalReactions}</div>
+          <div class="sc-delta ${satisfactionRate >= 50 ? 'up' : 'down'}">${satisfactionRate}% positive</div>
         </div>
       </div>
 
@@ -1588,6 +1693,123 @@ app.get('/admin/dashboard', (req, res) => {
         </button>
       </div>`;
       }).join('') : `<div class="empty"><p>No conversations yet</p></div>`}
+    </section>
+
+    <!-- Feedback -->
+    <section class="section" id="sec-feedback">
+      <div class="page-header">
+        <div>
+          <div class="page-title">AI Feedback</div>
+          <div class="page-sub">${totalReactions} reaction${totalReactions === 1 ? '' : 's'} · ${thumbsUp} positive · ${thumbsDown} negative</div>
+        </div>
+      </div>
+
+      <!-- Satisfaction hero -->
+      <div class="fb-hero">
+        <div class="fb-hero-main">
+          <div class="fb-rate">${satisfactionRate}<span>%</span></div>
+          <div class="fb-rate-label">Satisfaction Rate</div>
+          <div class="fb-rate-bar"><div class="fb-rate-fill" style="width:${satisfactionRate}%;background:${satisfactionRate >= 60 ? '#22c55e' : satisfactionRate >= 40 ? '#f59e0b' : '#ef4444'}"></div></div>
+        </div>
+        <div class="fb-summary">
+          <div class="fb-stat">
+            <div class="fb-stat-icon fb-up">${svg(ICONS.thumbUp, '#22c55e', 18)}</div>
+            <div>
+              <div class="fb-stat-val">${thumbsUp}</div>
+              <div class="fb-stat-lbl">Positive</div>
+            </div>
+          </div>
+          <div class="fb-stat">
+            <div class="fb-stat-icon fb-down">${svg(ICONS.thumbDown, '#ef4444', 18)}</div>
+            <div>
+              <div class="fb-stat-val">${thumbsDown}</div>
+              <div class="fb-stat-lbl">Negative</div>
+            </div>
+          </div>
+          <div class="fb-stat">
+            <div class="fb-stat-icon fb-total">${svg(ICONS.star, '#f59e0b', 18)}</div>
+            <div>
+              <div class="fb-stat-val">${totalReactions}</div>
+              <div class="fb-stat-lbl">Total</div>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <div class="grid-two">
+        <!-- Feedback by user -->
+        <div class="panel">
+          <div class="panel-head">
+            <div>
+              <div class="panel-title">Feedback by user</div>
+              <div class="panel-sub">Most active reviewers</div>
+            </div>
+            <span class="panel-ico">${svg(ICONS.users, 'var(--muted)', 16)}</span>
+          </div>
+          <div class="panel-body">
+            ${topFeedbackUsers.length ? topFeedbackUsers.map(u => {
+              const pctUp = u.total ? Math.round((u.up / u.total) * 100) : 0;
+              return `<div class="fb-user-row">
+                <div class="fb-user-info">
+                  <div class="fb-user-name">${escapeHtml(u.name)}</div>
+                  <div class="fb-user-email">${escapeHtml(u.email)}</div>
+                </div>
+                <div class="fb-user-reactions">
+                  <span class="fb-pill fb-pill-up">${svg(ICONS.thumbUp, '#22c55e', 11)}${u.up}</span>
+                  <span class="fb-pill fb-pill-down">${svg(ICONS.thumbDown, '#ef4444', 11)}${u.down}</span>
+                  <span class="fb-pill fb-pill-pct" style="color:${pctUp >= 60 ? '#22c55e' : pctUp >= 40 ? '#f59e0b' : '#ef4444'}">${pctUp}%</span>
+                </div>
+              </div>`;
+            }).join('') : '<div class="empty-inline"><p>No feedback yet</p></div>'}
+          </div>
+        </div>
+
+        <!-- Feedback by conversation -->
+        <div class="panel">
+          <div class="panel-head">
+            <div>
+              <div class="panel-title">Feedback by conversation</div>
+              <div class="panel-sub">Top rated chats</div>
+            </div>
+            <span class="panel-ico">${svg(ICONS.msgCircle, 'var(--muted)', 16)}</span>
+          </div>
+          <div class="panel-body">
+            ${topFeedbackConvs.length ? topFeedbackConvs.map(([, c]) => {
+              const pctUp = c.total ? Math.round((c.up / c.total) * 100) : 0;
+              return `<div class="fb-conv-row">
+                <div class="fb-conv-title">${svg(ICONS.msgCircle, 'var(--muted)', 12)}<span>${escapeHtml(c.title)}</span></div>
+                <div class="fb-conv-stats">
+                  <span class="fb-pill fb-pill-up">${svg(ICONS.thumbUp, '#22c55e', 11)}${c.up}</span>
+                  <span class="fb-pill fb-pill-down">${svg(ICONS.thumbDown, '#ef4444', 11)}${c.down}</span>
+                  <span class="fb-pill fb-pill-pct" style="color:${pctUp >= 60 ? '#22c55e' : pctUp >= 40 ? '#f59e0b' : '#ef4444'}">${pctUp}%</span>
+                </div>
+              </div>`;
+            }).join('') : '<div class="empty-inline"><p>No feedback yet</p></div>'}
+          </div>
+        </div>
+      </div>
+
+      <!-- Recent feedback -->
+      <div class="panel">
+        <div class="panel-head">
+          <div>
+            <div class="panel-title">Recent feedback</div>
+            <div class="panel-sub">Last ${recentFeedback.length} reaction${recentFeedback.length === 1 ? '' : 's'}</div>
+          </div>
+          <span class="panel-ico">${svg(ICONS.clock, 'var(--muted)', 16)}</span>
+        </div>
+        <div class="panel-body">
+          ${recentFeedback.length ? recentFeedback.map(r => `
+            <div class="fb-recent-row">
+              <span class="fb-react-icon ${r.reaction === 'up' ? 'fb-react-up' : 'fb-react-down'}">${r.reaction === 'up' ? svg(ICONS.thumbUp, '#22c55e', 14) : svg(ICONS.thumbDown, '#ef4444', 14)}</span>
+              <div class="fb-recent-info">
+                <div class="fb-recent-user">${escapeHtml(r.user_name || 'Unknown')}<span class="fb-recent-email"> · ${escapeHtml(r.user_email || '—')}</span></div>
+                <div class="fb-recent-conv">${svg(ICONS.msgCircle, 'var(--muted2)', 10)} ${escapeHtml(r.conv_title || 'Untitled')}</div>
+              </div>
+              <span class="fb-recent-badge ${r.reaction === 'up' ? 'fb-badge-up' : 'fb-badge-down'}">${r.reaction === 'up' ? 'Positive' : 'Negative'}</span>
+            </div>`).join('') : `<div class="empty-inline">${svg(ICONS.thumbUp, '#333', 32)}<p>No feedback yet</p></div>`}
+        </div>
+      </div>
     </section>
   </main>
 </div>
