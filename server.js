@@ -861,8 +861,10 @@ app.get('/admin/dashboard', (req, res) => {
       </div>`;
     }).join('');
 
+    const latestDate = g.messages.reduce((d, m) => { const t = m.created_at || ''; return t > d ? t : d; }, '');
+
     return `
-    <div class="user-card" data-search="${escapeHtml((name + ' ' + email).toLowerCase())}">
+    <div class="user-card" data-search="${escapeHtml((name + ' ' + email).toLowerCase())}" data-date="${escapeHtml(latestDate)}">
       <div class="user-header" onclick="toggleUser('${groupId}')">
         <div class="avatar">${escapeHtml(initials)}</div>
         <div class="user-meta">
@@ -892,7 +894,7 @@ app.get('/admin/dashboard', (req, res) => {
     const initials = String(u.name || '?').trim().split(/\s+/).map(p => p[0]).slice(0, 2).join('').toUpperCase() || '?';
     const userConvCount = allConvs.filter(c => c.user_id === u.id).length;
     return `
-    <div class="user-row ${u.suspended ? 'user-suspended' : ''}" data-search="${escapeHtml((u.name + ' ' + u.email).toLowerCase())}">
+    <div class="user-row ${u.suspended ? 'user-suspended' : ''}" data-search="${escapeHtml((u.name + ' ' + u.email).toLowerCase())}" data-date="${escapeHtml(u.created_at || '')}">
       <div class="avatar avatar-sm">${escapeHtml(initials)}</div>
       <div class="urow-meta">
         <div class="urow-name">${escapeHtml(u.name)}${u.suspended ? ` <span class="suspend-badge">${svg(ICONS.lock, '#ef4444', 10)} Suspended</span>` : ''}</div>
@@ -1197,6 +1199,41 @@ app.get('/admin/dashboard', (req, res) => {
   .fb-recent-badge{padding:3px 8px;border-radius:8px;font-size:10px;font-weight:700;text-transform:uppercase;letter-spacing:.5px;flex-shrink:0}
   .fb-badge-up{background:rgba(34,197,94,.1);color:#22c55e;border:1px solid rgba(34,197,94,.2)}
   .fb-badge-down{background:rgba(239,68,68,.1);color:#ef4444;border:1px solid rgba(239,68,68,.2)}
+  /* Date filter */
+  .date-filter{display:inline-flex;gap:2px;background:var(--card);border:1px solid var(--border);border-radius:10px;padding:3px;margin-left:auto}
+  .df-btn{padding:5px 12px;border:none;background:transparent;color:var(--muted);font-size:11px;font-weight:700;border-radius:8px;cursor:pointer;font-family:inherit;transition:all .15s}
+  .df-btn.active{background:var(--primary);color:#fff}
+  .df-btn:hover:not(.active){background:rgba(255,255,255,.05);color:var(--text)}
+  /* Conversation viewer */
+  .cv-overlay{position:fixed;inset:0;background:rgba(0,0,0,.75);backdrop-filter:blur(6px);-webkit-backdrop-filter:blur(6px);display:none;align-items:center;justify-content:center;z-index:250;padding:20px}
+  .cv-overlay.show{display:flex;animation:fadeIn .18s ease}
+  .cv-panel{background:var(--bg);border:1px solid var(--border);border-radius:20px;width:100%;max-width:720px;max-height:85vh;display:flex;flex-direction:column;overflow:hidden;box-shadow:0 30px 80px rgba(0,0,0,.6);animation:modalIn .22s cubic-bezier(.2,.9,.3,1)}
+  .cv-header{display:flex;align-items:center;gap:14px;padding:20px 24px;border-bottom:1px solid var(--border-soft);flex-shrink:0}
+  .cv-header-info{flex:1;min-width:0}
+  .cv-header-title{font-size:16px;font-weight:800;color:var(--text);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+  .cv-header-meta{font-size:11px;color:var(--muted);margin-top:3px;display:flex;gap:8px;align-items:center;flex-wrap:wrap}
+  .cv-close{width:36px;height:36px;border-radius:10px;border:1px solid var(--border);background:transparent;color:var(--muted);cursor:pointer;display:flex;align-items:center;justify-content:center;transition:all .15s;flex-shrink:0}
+  .cv-close:hover{background:#ef444418;border-color:#ef444440;color:#ef4444}
+  .cv-body{flex:1;overflow-y:auto;padding:16px 24px;display:flex;flex-direction:column;gap:12px}
+  .cv-msg{display:flex;gap:10px;animation:fadeIn .2s ease}
+  .cv-msg.cv-user{flex-direction:row-reverse}
+  .cv-bubble{max-width:80%;padding:12px 16px;border-radius:16px;font-size:13px;line-height:1.6;word-break:break-word;white-space:pre-wrap}
+  .cv-msg:not(.cv-user) .cv-bubble{background:var(--card);border:1px solid var(--border);border-top-left-radius:4px;color:var(--text)}
+  .cv-msg.cv-user .cv-bubble{background:linear-gradient(135deg,var(--primary),#8b1217);color:#fff;border-top-right-radius:4px}
+  .cv-avatar{width:28px;height:28px;border-radius:50%;display:flex;align-items:center;justify-content:center;font-size:10px;font-weight:800;flex-shrink:0}
+  .cv-msg:not(.cv-user) .cv-avatar{background:linear-gradient(135deg,#1a1a2e,#16213e);color:#888;border:1px solid var(--border)}
+  .cv-msg.cv-user .cv-avatar{background:linear-gradient(135deg,var(--primary),#8b1217);color:#fff}
+  .cv-time{font-size:9px;color:var(--muted2);text-align:center;margin:4px 0}
+  .cv-loading{text-align:center;padding:40px;color:var(--muted)}
+  .cv-empty{text-align:center;padding:40px;color:var(--muted2)}
+  .cv-count{font-size:11px;color:var(--muted);text-align:center;padding:8px;border-bottom:1px solid var(--border-soft);flex-shrink:0}
+  @media(max-width:960px){
+    .cv-panel{max-width:100%;max-height:90vh;border-radius:16px}
+    .cv-header{padding:16px}
+    .cv-body{padding:12px 16px}
+    .cv-bubble{max-width:88%;font-size:12px}
+    .date-filter{margin-left:0;margin-top:8px}
+  }
   /* Empty state */
   .empty{text-align:center;padding:60px 20px;color:var(--muted2);background:var(--card);border:1px dashed var(--border);border-radius:var(--radius)}
   .empty-icon{opacity:.3;margin-bottom:12px}
@@ -1635,6 +1672,12 @@ app.get('/admin/dashboard', (req, res) => {
           <div class="page-sub">${userGroups.length} user${userGroups.length === 1 ? '' : 's'} · ${contacts.length} message${contacts.length === 1 ? '' : 's'}${orphanCount ? ` · <span style="color:#f59e0b;font-weight:700">${orphanCount} orphan${orphanCount === 1 ? '' : 's'}</span>` : ''}</div>
         </div>
         <div style="display:flex;gap:10px;align-items:center;flex-wrap:wrap">
+          <div class="date-filter">
+            <button class="df-btn active" data-days="0" onclick="filterByDate(this,'messages','.user-card')">All</button>
+            <button class="df-btn" data-days="7" onclick="filterByDate(this,'messages','.user-card')">7d</button>
+            <button class="df-btn" data-days="30" onclick="filterByDate(this,'messages','.user-card')">30d</button>
+            <button class="df-btn" data-days="90" onclick="filterByDate(this,'messages','.user-card')">90d</button>
+          </div>
           ${orphanCount ? `<button class="panel-action" style="border-color:#f59e0b55;color:#f59e0b" onclick="cleanupOrphans(${orphanCount})">${svg(ICONS.trash, '#f59e0b', 12)} Clean ${orphanCount} orphan${orphanCount === 1 ? '' : 's'}</button>` : ''}
           <div class="search-wrap">
             <span class="search-icon">${svg(ICONS.search, '#555', 15)}</span>
@@ -1652,9 +1695,17 @@ app.get('/admin/dashboard', (req, res) => {
           <div class="page-title">Users</div>
           <div class="page-sub">${users.length} registered account${users.length === 1 ? '' : 's'}${suspendedCount ? ` · <span style="color:#ef4444;font-weight:700">${suspendedCount} suspended</span>` : ''}</div>
         </div>
-        <div class="search-wrap">
-          <span class="search-icon">${svg(ICONS.search, '#555', 15)}</span>
-          <input class="search-input" id="userSearch" placeholder="Search users…" oninput="filterCards('userSearch','.user-row')">
+        <div style="display:flex;gap:10px;align-items:center;flex-wrap:wrap">
+          <div class="date-filter">
+            <button class="df-btn active" data-days="0" onclick="filterByDate(this,'users','.user-row')">All</button>
+            <button class="df-btn" data-days="7" onclick="filterByDate(this,'users','.user-row')">7d</button>
+            <button class="df-btn" data-days="30" onclick="filterByDate(this,'users','.user-row')">30d</button>
+            <button class="df-btn" data-days="90" onclick="filterByDate(this,'users','.user-row')">90d</button>
+          </div>
+          <div class="search-wrap">
+            <span class="search-icon">${svg(ICONS.search, '#555', 15)}</span>
+            <input class="search-input" id="userSearch" placeholder="Search users…" oninput="filterCards('userSearch','.user-row')">
+          </div>
         </div>
       </div>
       ${userRows || `<div class="empty"><p>No users yet</p></div>`}
@@ -1667,9 +1718,17 @@ app.get('/admin/dashboard', (req, res) => {
           <div class="page-title">Conversations</div>
           <div class="page-sub">${totalConvs} conversation${totalConvs === 1 ? '' : 's'} · ${totalMsgsInConvs} total messages</div>
         </div>
-        <div class="search-wrap">
-          <span class="search-icon">${svg(ICONS.search, '#555', 15)}</span>
-          <input class="search-input" id="convSearch" placeholder="Search conversations…" oninput="filterCards('convSearch','.conv-row')">
+        <div style="display:flex;gap:10px;align-items:center;flex-wrap:wrap">
+          <div class="date-filter">
+            <button class="df-btn active" data-days="0" onclick="filterByDate(this,'conversations','.conv-row')">All</button>
+            <button class="df-btn" data-days="7" onclick="filterByDate(this,'conversations','.conv-row')">7d</button>
+            <button class="df-btn" data-days="30" onclick="filterByDate(this,'conversations','.conv-row')">30d</button>
+            <button class="df-btn" data-days="90" onclick="filterByDate(this,'conversations','.conv-row')">90d</button>
+          </div>
+          <div class="search-wrap">
+            <span class="search-icon">${svg(ICONS.search, '#555', 15)}</span>
+            <input class="search-input" id="convSearch" placeholder="Search conversations…" oninput="filterCards('convSearch','.conv-row')">
+          </div>
         </div>
       </div>
       ${allConvs.length ? allConvs.map(c => {
@@ -1677,7 +1736,7 @@ app.get('/admin/dashboard', (req, res) => {
         const modelShort = (c.model || '').split('/').pop() || c.model || '—';
         const updatedDate = c.updated_at ? new Date(c.updated_at).toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric', hour: '2-digit', minute: '2-digit' }) : '—';
         return `
-      <div class="conv-row" data-search="${escapeHtml(((c.user_name || '') + ' ' + (c.user_email || '') + ' ' + (c.title || '')).toLowerCase())}">
+      <div class="conv-row" data-search="${escapeHtml(((c.user_name || '') + ' ' + (c.user_email || '') + ' ' + (c.title || '')).toLowerCase())}" data-date="${c.updated_at || ''}">
         <div class="avatar avatar-sm">${escapeHtml(cInitials)}</div>
         <div class="conv-main">
           <div class="conv-title">${svg(ICONS.msgCircle, 'var(--muted)', 12)}<span>${escapeHtml(c.title || 'Untitled')}</span></div>
@@ -1688,9 +1747,14 @@ app.get('/admin/dashboard', (req, res) => {
           <span class="info-item conv-model">${escapeHtml(modelShort)}</span>
           <span class="info-item">${svg(ICONS.clock, '#666', 12)}${escapeHtml(updatedDate)}</span>
         </div>
-        <button class="btn-icon btn-danger" onclick="deleteConv('${escapeHtml(c.id)}', '${escapeHtml(c.title || 'Untitled').replace(/'/g,"\\'")}')" title="Delete conversation">
-          ${svg(ICONS.trash, '#ef4444', 15)}
-        </button>
+        <div style="display:flex;gap:6px;flex-shrink:0">
+          <button class="btn-icon" onclick="viewConv('${escapeHtml(c.id)}')" title="View messages" style="border-color:#8b5cf640">
+            ${svg(ICONS.message, '#8b5cf6', 15)}
+          </button>
+          <button class="btn-icon btn-danger" onclick="deleteConv('${escapeHtml(c.id)}', '${escapeHtml(c.title || 'Untitled').replace(/'/g,"\\'")}')" title="Delete conversation">
+            ${svg(ICONS.trash, '#ef4444', 15)}
+          </button>
+        </div>
       </div>`;
       }).join('') : `<div class="empty"><p>No conversations yet</p></div>`}
     </section>
@@ -1815,6 +1879,23 @@ app.get('/admin/dashboard', (req, res) => {
 </div>
 
 <div class="toast" id="toast"></div>
+
+<!-- Conversation viewer -->
+<div class="cv-overlay" id="cvOverlay" onclick="if(event.target===this)closeCv()">
+  <div class="cv-panel">
+    <div class="cv-header">
+      <div class="cv-header-info">
+        <div class="cv-header-title" id="cvTitle">Conversation</div>
+        <div class="cv-header-meta" id="cvMeta"></div>
+      </div>
+      <button class="cv-close" onclick="closeCv()" title="Close">${svg(ICONS.x, 'currentColor', 16)}</button>
+    </div>
+    <div class="cv-count" id="cvCount"></div>
+    <div class="cv-body" id="cvBody">
+      <div class="cv-loading">Loading…</div>
+    </div>
+  </div>
+</div>
 <div class="modal-overlay" id="confirmModal" onclick="if(event.target===this)closeConfirm(false)">
   <div class="modal" role="dialog" aria-modal="true">
     <div class="modal-head">
@@ -2036,6 +2117,75 @@ app.get('/admin/dashboard', (req, res) => {
     a.click();
     showToast('CSV exported (' + (rows.length-1) + ' rows)', true);
   }
+
+  // ── Conversation viewer ──
+  async function viewConv(id){
+    const overlay = document.getElementById('cvOverlay');
+    const body = document.getElementById('cvBody');
+    const title = document.getElementById('cvTitle');
+    const meta = document.getElementById('cvMeta');
+    const count = document.getElementById('cvCount');
+    body.innerHTML = '<div class="cv-loading">Loading…</div>';
+    title.textContent = 'Loading…';
+    meta.innerHTML = '';
+    count.textContent = '';
+    overlay.classList.add('show');
+    try {
+      const r = await fetch('/admin/conversations/'+encodeURIComponent(id)+'/messages', { credentials:'include' });
+      const d = await r.json();
+      if(!r.ok){ body.innerHTML = '<div class="cv-empty">'+( d.error || 'Failed to load')+'</div>'; return; }
+      title.textContent = d.title || 'Untitled';
+      const model = (d.model||'').split('/').pop() || d.model || '—';
+      meta.innerHTML = d.user_name + ' · ' + d.user_email + ' · <span class="conv-model">'+model+'</span>';
+      count.textContent = d.messages.length + ' message' + (d.messages.length === 1 ? '' : 's');
+      if(!d.messages.length){ body.innerHTML = '<div class="cv-empty">No messages</div>'; return; }
+      let html = '';
+      d.messages.forEach((m,i) => {
+        const isUser = m.role === 'user';
+        const t = m.timestamp ? new Date(m.timestamp).toLocaleTimeString(undefined,{hour:'2-digit',minute:'2-digit'}) : '';
+        if(i > 0 && t) html += '<div class="cv-time">' + t + '</div>';
+        const content = m.content.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
+        const label = isUser ? 'U' : 'AI';
+        html += '<div class="cv-msg ' + (isUser ? 'cv-user' : '') + '">' +
+          '<div class="cv-avatar">' + label + '</div>' +
+          '<div class="cv-bubble">' + content + '</div>' +
+        '</div>';
+      });
+      body.innerHTML = html;
+      body.scrollTop = body.scrollHeight;
+    } catch(e){
+      body.innerHTML = '<div class="cv-empty">Network error</div>';
+    }
+  }
+  function closeCv(){
+    document.getElementById('cvOverlay').classList.remove('show');
+  }
+  document.addEventListener('keydown', e => {
+    if(e.key === 'Escape' && document.getElementById('cvOverlay').classList.contains('show')){
+      closeCv();
+    }
+  });
+
+  // ── Date filter ──
+  function filterByDate(btn, section, selector){
+    document.querySelectorAll('#sec-'+section+' .df-btn').forEach(b=>b.classList.remove('active'));
+    btn.classList.add('active');
+    const days = parseInt(btn.dataset.days);
+    const cutoff = days ? Date.now() - days * 86400000 : 0;
+    document.querySelectorAll('#sec-'+section+' '+selector).forEach(el => {
+      if(!cutoff){ el.style.display = ''; return; }
+      const dateStr = el.dataset.date || '';
+      const ts = dateStr ? new Date(dateStr).getTime() : 0;
+      el.style.display = (ts && ts >= cutoff) ? '' : 'none';
+    });
+  }
+
+  // ── Tab title with pending count ──
+  const pendingN = ${pendingCount};
+  if(pendingN > 0) document.title = '(' + pendingN + ') Admin Dashboard · Runner Code';
+
+  // ── Auto-refresh every 60s ──
+  setTimeout(()=>location.reload(), 60000);
 </script>
 </body></html>`);
 });
@@ -2203,6 +2353,29 @@ app.delete('/admin/conversations/:id', requireAdmin, (req, res) => {
     db.prepare('DELETE FROM conversations WHERE id = ?').run(id);
     console.log(`🗑️ Admin deleted conversation (id=${id})`);
     res.json({ ok: true });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// ── GET /admin/conversations/:id/messages ─────────────────────────────────────
+app.get('/admin/conversations/:id/messages', requireAdmin, (req, res) => {
+  const { id } = req.params;
+  try {
+    const conv = db.prepare('SELECT id, title, model, messages, created_at, updated_at, user_id FROM conversations WHERE id = ?').get(id);
+    if (!conv) return res.status(404).json({ error: 'Not found' });
+    const user = conv.user_id ? db.prepare('SELECT name, email FROM users WHERE id = ?').get(conv.user_id) : null;
+    const messages = JSON.parse(conv.messages || '[]');
+    res.json({
+      id: conv.id,
+      title: conv.title,
+      model: conv.model,
+      user_name: user?.name || 'Unknown',
+      user_email: user?.email || '—',
+      created_at: conv.created_at,
+      updated_at: conv.updated_at,
+      messages: messages.map(m => ({ role: m.role, content: m.content, timestamp: m.timestamp })),
+    });
   } catch (err) {
     res.status(500).json({ error: err.message });
   }
