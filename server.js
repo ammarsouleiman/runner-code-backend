@@ -1544,7 +1544,7 @@ app.get('/admin/dashboard', (req, res) => {
           </div>
           <div class="panel-body">
             ${topActiveUsers.length ? topActiveUsers.map((u, i) => {
-              const initials = String(u.name || '?').trim().split(/\\s+/).map(p => p[0]).slice(0, 2).join('').toUpperCase() || '?';
+              const initials = String(u.name || '?').trim().split(/\s+/).map(p => p[0]).slice(0, 2).join('').toUpperCase() || '?';
               return `<div class="top-user-row">
                 <span class="top-rank">#${i + 1}</span>
                 <div class="avatar avatar-sm">${escapeHtml(initials)}</div>
@@ -1673,7 +1673,7 @@ app.get('/admin/dashboard', (req, res) => {
         </div>
       </div>
       ${allConvs.length ? allConvs.map(c => {
-        const cInitials = String(c.user_name || '?').trim().split(/\\s+/).map(p => p[0]).slice(0, 2).join('').toUpperCase() || '?';
+        const cInitials = String(c.user_name || '?').trim().split(/\s+/).map(p => p[0]).slice(0, 2).join('').toUpperCase() || '?';
         const modelShort = (c.model || '').split('/').pop() || c.model || '—';
         const updatedDate = c.updated_at ? new Date(c.updated_at).toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric', hour: '2-digit', minute: '2-digit' }) : '—';
         return `
