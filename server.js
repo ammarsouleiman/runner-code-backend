@@ -861,10 +861,8 @@ app.get('/admin/dashboard', (req, res) => {
       </div>`;
     }).join('');
 
-    const latestDate = g.messages.reduce((d, m) => { const t = m.created_at || ''; return t > d ? t : d; }, '');
-
     return `
-    <div class="user-card" data-search="${escapeHtml((name + ' ' + email).toLowerCase())}" data-date="${escapeHtml(latestDate)}">
+    <div class="user-card" data-search="${escapeHtml((name + ' ' + email).toLowerCase())}">
       <div class="user-header" onclick="toggleUser('${groupId}')">
         <div class="avatar">${escapeHtml(initials)}</div>
         <div class="user-meta">
@@ -894,7 +892,7 @@ app.get('/admin/dashboard', (req, res) => {
     const initials = String(u.name || '?').trim().split(/\s+/).map(p => p[0]).slice(0, 2).join('').toUpperCase() || '?';
     const userConvCount = allConvs.filter(c => c.user_id === u.id).length;
     return `
-    <div class="user-row ${u.suspended ? 'user-suspended' : ''}" data-search="${escapeHtml((u.name + ' ' + u.email).toLowerCase())}" data-date="${escapeHtml(u.created_at || '')}">
+    <div class="user-row ${u.suspended ? 'user-suspended' : ''}" data-search="${escapeHtml((u.name + ' ' + u.email).toLowerCase())}">
       <div class="avatar avatar-sm">${escapeHtml(initials)}</div>
       <div class="urow-meta">
         <div class="urow-name">${escapeHtml(u.name)}${u.suspended ? ` <span class="suspend-badge">${svg(ICONS.lock, '#ef4444', 10)} Suspended</span>` : ''}</div>
@@ -1199,11 +1197,6 @@ app.get('/admin/dashboard', (req, res) => {
   .fb-recent-badge{padding:3px 8px;border-radius:8px;font-size:10px;font-weight:700;text-transform:uppercase;letter-spacing:.5px;flex-shrink:0}
   .fb-badge-up{background:rgba(34,197,94,.1);color:#22c55e;border:1px solid rgba(34,197,94,.2)}
   .fb-badge-down{background:rgba(239,68,68,.1);color:#ef4444;border:1px solid rgba(239,68,68,.2)}
-  /* Date filter */
-  .date-filter{display:inline-flex;gap:2px;background:var(--card);border:1px solid var(--border);border-radius:10px;padding:3px;margin-left:auto}
-  .df-btn{padding:5px 12px;border:none;background:transparent;color:var(--muted);font-size:11px;font-weight:700;border-radius:8px;cursor:pointer;font-family:inherit;transition:all .15s}
-  .df-btn.active{background:var(--primary);color:#fff}
-  .df-btn:hover:not(.active){background:rgba(255,255,255,.05);color:var(--text)}
   /* Conversation viewer */
   .cv-overlay{position:fixed;inset:0;background:rgba(0,0,0,.75);backdrop-filter:blur(6px);-webkit-backdrop-filter:blur(6px);display:none;align-items:center;justify-content:center;z-index:250;padding:20px}
   .cv-overlay.show{display:flex;animation:fadeIn .18s ease}
@@ -1232,7 +1225,6 @@ app.get('/admin/dashboard', (req, res) => {
     .cv-header{padding:16px}
     .cv-body{padding:12px 16px}
     .cv-bubble{max-width:88%;font-size:12px}
-    .date-filter{margin-left:0;margin-top:8px}
   }
   /* Empty state */
   .empty{text-align:center;padding:60px 20px;color:var(--muted2);background:var(--card);border:1px dashed var(--border);border-radius:var(--radius)}
@@ -1672,12 +1664,6 @@ app.get('/admin/dashboard', (req, res) => {
           <div class="page-sub">${userGroups.length} user${userGroups.length === 1 ? '' : 's'} · ${contacts.length} message${contacts.length === 1 ? '' : 's'}${orphanCount ? ` · <span style="color:#f59e0b;font-weight:700">${orphanCount} orphan${orphanCount === 1 ? '' : 's'}</span>` : ''}</div>
         </div>
         <div style="display:flex;gap:10px;align-items:center;flex-wrap:wrap">
-          <div class="date-filter">
-            <button class="df-btn active" data-days="0" onclick="filterByDate(this,'messages','.user-card')">All</button>
-            <button class="df-btn" data-days="7" onclick="filterByDate(this,'messages','.user-card')">7d</button>
-            <button class="df-btn" data-days="30" onclick="filterByDate(this,'messages','.user-card')">30d</button>
-            <button class="df-btn" data-days="90" onclick="filterByDate(this,'messages','.user-card')">90d</button>
-          </div>
           ${orphanCount ? `<button class="panel-action" style="border-color:#f59e0b55;color:#f59e0b" onclick="cleanupOrphans(${orphanCount})">${svg(ICONS.trash, '#f59e0b', 12)} Clean ${orphanCount} orphan${orphanCount === 1 ? '' : 's'}</button>` : ''}
           <div class="search-wrap">
             <span class="search-icon">${svg(ICONS.search, '#555', 15)}</span>
@@ -1695,17 +1681,9 @@ app.get('/admin/dashboard', (req, res) => {
           <div class="page-title">Users</div>
           <div class="page-sub">${users.length} registered account${users.length === 1 ? '' : 's'}${suspendedCount ? ` · <span style="color:#ef4444;font-weight:700">${suspendedCount} suspended</span>` : ''}</div>
         </div>
-        <div style="display:flex;gap:10px;align-items:center;flex-wrap:wrap">
-          <div class="date-filter">
-            <button class="df-btn active" data-days="0" onclick="filterByDate(this,'users','.user-row')">All</button>
-            <button class="df-btn" data-days="7" onclick="filterByDate(this,'users','.user-row')">7d</button>
-            <button class="df-btn" data-days="30" onclick="filterByDate(this,'users','.user-row')">30d</button>
-            <button class="df-btn" data-days="90" onclick="filterByDate(this,'users','.user-row')">90d</button>
-          </div>
-          <div class="search-wrap">
-            <span class="search-icon">${svg(ICONS.search, '#555', 15)}</span>
-            <input class="search-input" id="userSearch" placeholder="Search users…" oninput="filterCards('userSearch','.user-row')">
-          </div>
+        <div class="search-wrap">
+          <span class="search-icon">${svg(ICONS.search, '#555', 15)}</span>
+          <input class="search-input" id="userSearch" placeholder="Search users…" oninput="filterCards('userSearch','.user-row')">
         </div>
       </div>
       ${userRows || `<div class="empty"><p>No users yet</p></div>`}
@@ -1718,17 +1696,9 @@ app.get('/admin/dashboard', (req, res) => {
           <div class="page-title">Conversations</div>
           <div class="page-sub">${totalConvs} conversation${totalConvs === 1 ? '' : 's'} · ${totalMsgsInConvs} total messages</div>
         </div>
-        <div style="display:flex;gap:10px;align-items:center;flex-wrap:wrap">
-          <div class="date-filter">
-            <button class="df-btn active" data-days="0" onclick="filterByDate(this,'conversations','.conv-row')">All</button>
-            <button class="df-btn" data-days="7" onclick="filterByDate(this,'conversations','.conv-row')">7d</button>
-            <button class="df-btn" data-days="30" onclick="filterByDate(this,'conversations','.conv-row')">30d</button>
-            <button class="df-btn" data-days="90" onclick="filterByDate(this,'conversations','.conv-row')">90d</button>
-          </div>
-          <div class="search-wrap">
-            <span class="search-icon">${svg(ICONS.search, '#555', 15)}</span>
-            <input class="search-input" id="convSearch" placeholder="Search conversations…" oninput="filterCards('convSearch','.conv-row')">
-          </div>
+        <div class="search-wrap">
+          <span class="search-icon">${svg(ICONS.search, '#555', 15)}</span>
+          <input class="search-input" id="convSearch" placeholder="Search conversations…" oninput="filterCards('convSearch','.conv-row')">
         </div>
       </div>
       ${allConvs.length ? allConvs.map(c => {
@@ -1736,7 +1706,7 @@ app.get('/admin/dashboard', (req, res) => {
         const modelShort = (c.model || '').split('/').pop() || c.model || '—';
         const updatedDate = c.updated_at ? new Date(c.updated_at).toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric', hour: '2-digit', minute: '2-digit' }) : '—';
         return `
-      <div class="conv-row" data-search="${escapeHtml(((c.user_name || '') + ' ' + (c.user_email || '') + ' ' + (c.title || '')).toLowerCase())}" data-date="${c.updated_at || ''}">
+      <div class="conv-row" data-search="${escapeHtml(((c.user_name || '') + ' ' + (c.user_email || '') + ' ' + (c.title || '')).toLowerCase())}">
         <div class="avatar avatar-sm">${escapeHtml(cInitials)}</div>
         <div class="conv-main">
           <div class="conv-title">${svg(ICONS.msgCircle, 'var(--muted)', 12)}<span>${escapeHtml(c.title || 'Untitled')}</span></div>
@@ -2165,20 +2135,6 @@ app.get('/admin/dashboard', (req, res) => {
       closeCv();
     }
   });
-
-  // ── Date filter ──
-  function filterByDate(btn, section, selector){
-    document.querySelectorAll('#sec-'+section+' .df-btn').forEach(b=>b.classList.remove('active'));
-    btn.classList.add('active');
-    const days = parseInt(btn.dataset.days);
-    const cutoff = days ? Date.now() - days * 86400000 : 0;
-    document.querySelectorAll('#sec-'+section+' '+selector).forEach(el => {
-      if(!cutoff){ el.style.display = ''; return; }
-      const dateStr = el.dataset.date || '';
-      const ts = dateStr ? new Date(dateStr).getTime() : 0;
-      el.style.display = (ts && ts >= cutoff) ? '' : 'none';
-    });
-  }
 
   // ── Tab title with pending count ──
   const pendingN = ${pendingCount};
