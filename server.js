@@ -1149,13 +1149,19 @@ app.get('/admin/dashboard', (req, res) => {
   .modal-btn:disabled{opacity:.6;cursor:not-allowed}
   /* Responsive */
   @media(max-width:960px){
-    .layout{grid-template-columns:1fr}
-    .sidebar{position:static;height:auto;flex-direction:row;overflow-x:auto;padding:10px;gap:6px;-webkit-overflow-scrolling:touch}
+    .layout{grid-template-columns:1fr;padding-bottom:64px}
+    .sidebar{position:fixed;bottom:0;left:0;right:0;top:auto;height:auto;flex-direction:row;padding:0;gap:0;z-index:900;background:#0d0d0d;border-right:none;border-top:1px solid var(--border);box-shadow:0 -4px 20px rgba(0,0,0,.5)}
     .brand{display:none}
-    .nav{flex-direction:row;flex:none}
-    .nav-item{white-space:nowrap;padding:8px 10px;font-size:12px}
-    .nav-badge{font-size:9px;padding:1px 6px}
-    .logout-btn{white-space:nowrap;padding:8px 10px;font-size:12px}
+    .nav{flex-direction:row;flex:1;justify-content:space-around;gap:0}
+    .nav-item{flex-direction:column;gap:3px;padding:8px 4px;font-size:10px;border-radius:0;justify-content:center;align-items:center;flex:1;min-width:0}
+    .nav-item svg{width:18px;height:18px;flex-shrink:0}
+    .nav-item span:not(.nav-badge){overflow:hidden;text-overflow:ellipsis;white-space:nowrap;max-width:100%}
+    .nav-item.active{background:rgba(227,30,36,.08)}
+    .nav-badge{position:absolute;top:4px;right:50%;transform:translateX(calc(50% + 12px));font-size:8px;padding:1px 5px;min-width:16px;text-align:center}
+    .nav-item{position:relative}
+    .logout-btn{flex-direction:column;gap:3px;padding:8px 4px;font-size:10px;border:none;border-radius:0;justify-content:center;align-items:center;flex:0 0 auto;min-width:52px}
+    .logout-btn span{font-size:10px}
+    .logout-btn svg{width:18px;height:18px}
     .main{padding:16px}
     .hero{grid-template-columns:1fr;padding:20px;gap:20px}
     .hero-title{font-size:22px}
@@ -1206,8 +1212,10 @@ app.get('/admin/dashboard', (req, res) => {
     .hero-title{font-size:19px}
     .kpi-value{font-size:28px}
     .main{padding:12px}
-    .nav-item{padding:6px 8px;font-size:11px}
-    .nav-item svg{display:none}
+    .nav-item{padding:6px 2px;font-size:9px}
+    .nav-item svg{width:16px;height:16px}
+    .nav-badge{font-size:7px;padding:0 4px;min-width:14px;top:2px}
+    .logout-btn{min-width:44px;padding:6px 2px;font-size:9px}
     .qa-btn{flex:1;justify-content:center}
     .top-user-row{flex-wrap:wrap;gap:6px}
     .top-stats{width:100%;justify-content:flex-end}
