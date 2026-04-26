@@ -675,6 +675,37 @@ app.get('/admin/dashboard', (req, res) => {
   const suspendedCount = users.filter(u => u.suspended).length;
   const totalConvs = allConvs.length;
   const totalMsgsInConvs = allConvs.reduce((s, c) => s + (c.message_count || 0), 0);
+  const repliedCount = contacts.filter(c => c.admin_reply && c.admin_reply.trim()).length;
+  const unrepliedCount = totalContacts - repliedCount;
+
+  // Country distribution (top 8)
+  const countryMap = {};
+  users.forEach(u => { const c = u.country || 'Unknown'; countryMap[c] = (countryMap[c] || 0) + 1; });
+  const topCountries = Object.entries(countryMap)
+    .sort((a, b) => b[1] - a[1])
+    .slice(0, 8);
+
+  // AI Model usage
+  const modelMap = {};
+  allConvs.forEach(c => { const m = (c.model || '').split('/').pop() || 'Unknown'; modelMap[m] = (modelMap[m] || 0) + 1; });
+  const topModels = Object.entries(modelMap)
+    .sort((a, b) => b[1] - a[1])
+    .slice(0, 6);
+
+  // Top active users (by conversations)
+  const userConvMap = {};
+  allConvs.forEach(c => { if (c.user_id) userConvMap[c.user_id] = (userConvMap[c.user_id] || 0) + 1; });
+  const topActiveUsers = Object.entries(userConvMap)
+    .sort((a, b) => b[1] - a[1])
+    .slice(0, 5)
+    .map(([uid, count]) => {
+      const u = users.find(u => u.id === Number(uid));
+      return { name: u?.name || 'Unknown', email: u?.email || '—', count, msgs: allConvs.filter(c => c.user_id === Number(uid)).reduce((s, c) => s + (c.message_count || 0), 0) };
+    });
+
+  // DB file size
+  let dbSizeStr = '—';
+  try { const fs = require('fs'); const sz = fs.statSync(db.name).size; dbSizeStr = sz < 1048576 ? (sz / 1024).toFixed(1) + ' KB' : (sz / 1048576).toFixed(1) + ' MB'; } catch {}
 
   // Recent activity
   const recentContacts = [...contacts]
@@ -756,10 +787,10 @@ app.get('/admin/dashboard', (req, res) => {
       const locked = c.status !== 'pending';
       const hasReply = c.admin_reply && c.admin_reply.trim();
       return `
-      <div class="msg-item" id="crow-${c.id}">
+      <div class="msg-item" id="crow-${c.id}" data-user="${escapeHtml(g.messages[0]?.user_name || name || '')}" data-email="${escapeHtml(g.messages[0]?.user_email || email || '')}">
         <div class="msg-top">
           <span class="type-dot" style="background:${typeColorDot[c.type] || '#94a3b8'}"></span>
-          <span class="type-label">${typeIcon[c.type] || typeIcon.other}${escapeHtml(c.type)}</span>
+          <span class="type-label msg-type">${typeIcon[c.type] || typeIcon.other}${escapeHtml(c.type)}</span>
           <span class="msg-date">${escapeHtml(c.created_at || '')}</span>
           <span id="cstatus-${c.id}" class="msg-status">${statusPill(c.status)}</span>
         </div>
@@ -768,7 +799,7 @@ app.get('/admin/dashboard', (req, res) => {
         ${hasReply ? `
         <div class="admin-reply-box">
           <div class="admin-reply-head">${svg(ICONS.reply, '#8b5cf6', 12)}<span>Admin reply</span><span class="admin-reply-date">${escapeHtml(c.replied_at || '')}</span></div>
-          <div class="admin-reply-text">${escapeHtml(c.admin_reply)}</div>
+          <div class="admin-reply-text reply-text">${escapeHtml(c.admin_reply)}</div>
         </div>` : ''}
         <div class="msg-actions" id="cactions-${c.id}">
           ${locked
@@ -828,9 +859,11 @@ app.get('/admin/dashboard', (req, res) => {
         <div class="urow-email">${escapeHtml(u.email)}</div>
       </div>
       <div class="urow-info">
-        <span class="info-item">${svg(ICONS.globe, '#666', 12)}${escapeHtml(u.country || '—')}</span>
+        <span class="info-item urow-country">${svg(ICONS.globe, '#666', 12)}${escapeHtml(u.country || '—')}</span>
         <span class="info-item">${svg(ICONS.msgCircle, '#666', 12)}${userConvCount} chats</span>
-        <span class="info-item">${svg(ICONS.calendar, '#666', 12)}${escapeHtml(u.created_at || '—')}</span>
+        <span class="info-item urow-date">${svg(ICONS.calendar, '#666', 12)}${escapeHtml(u.created_at || '—')}</span>
+        <span class="urow-auth" style="display:none">${u.google_id && hasRealPassword ? 'Google+Password' : u.google_id ? 'Google' : hasRealPassword ? 'Password' : 'None'}</span>
+        ${u.suspended ? '<span class="urow-suspended" style="display:none">1</span>' : ''}
         ${authBadge}
       </div>
       <div class="urow-actions">
@@ -917,6 +950,8 @@ app.get('/admin/dashboard', (req, res) => {
   .sc-pending::before{background:linear-gradient(90deg,#f59e0b,#b45309)}
   .sc-approved::before{background:linear-gradient(90deg,#22c55e,#15803d)}
   .sc-rejected::before{background:linear-gradient(90deg,#ef4444,#b91c1c)}
+  .sc-convs::before{background:linear-gradient(90deg,#06b6d4,#0891b2)}
+  .sc-convs .sc-icon{background:linear-gradient(135deg,#06b6d4,#0891b2)}
   .sc-icon{width:40px;height:40px;border-radius:12px;display:flex;align-items:center;justify-content:center;margin-bottom:14px}
   .sc-users .sc-icon{background:linear-gradient(135deg,#E31E24,#8b1217)}
   .sc-msgs .sc-icon{background:linear-gradient(135deg,#8b5cf6,#6d28d9)}
@@ -1054,6 +1089,29 @@ app.get('/admin/dashboard', (req, res) => {
   .conv-meta{color:var(--muted);font-size:11px;margin-top:2px}
   .conv-info{display:flex;gap:12px;align-items:center;flex-wrap:wrap;flex-shrink:0}
   .conv-model{padding:2px 8px;background:rgba(139,92,246,.1);border:1px solid rgba(139,92,246,.25);border-radius:6px;color:#a78bfa;font-size:10px;font-weight:700}
+  /* Quick actions */
+  .quick-actions{display:flex;gap:10px;margin-bottom:24px;flex-wrap:wrap}
+  .qa-btn{display:inline-flex;align-items:center;gap:8px;padding:10px 16px;background:var(--card);border:1px solid var(--border);border-radius:12px;color:var(--text);font-size:12px;font-weight:700;cursor:pointer;font-family:inherit;transition:all .15s}
+  .qa-btn:hover{border-color:var(--primary);color:var(--primary);background:rgba(227,30,36,.05);transform:translateY(-1px)}
+  .qa-count{background:#262626;color:var(--muted);padding:2px 7px;border-radius:8px;font-size:10px;font-weight:700;margin-left:2px}
+  .qa-btn:hover .qa-count{background:rgba(227,30,36,.15);color:var(--primary)}
+  /* Top users */
+  .top-user-row{display:flex;align-items:center;gap:10px;padding:10px 0}
+  .top-user-row + .top-user-row{border-top:1px solid var(--border-soft)}
+  .top-rank{color:var(--muted2);font-size:12px;font-weight:800;width:24px;text-align:center;flex-shrink:0}
+  .top-meta{flex:1;min-width:0}
+  .top-name{font-size:13px;font-weight:700;color:var(--text)}
+  .top-email{font-size:11px;color:var(--muted);margin-top:1px}
+  .top-stats{display:flex;gap:8px;flex-shrink:0}
+  .top-stat{display:inline-flex;align-items:center;gap:4px;font-size:10px;font-weight:700;color:var(--muted);padding:2px 6px;border-radius:6px;background:rgba(255,255,255,.03)}
+  /* System info */
+  .sys-grid{display:grid;grid-template-columns:1fr 1fr;gap:0}
+  .sys-item{padding:12px 0;border-bottom:1px solid var(--border-soft);display:flex;justify-content:space-between;align-items:center}
+  .sys-item:nth-child(odd){padding-right:16px;border-right:1px solid var(--border-soft)}
+  .sys-item:nth-child(even){padding-left:16px}
+  .sys-item:nth-last-child(-n+2){border-bottom:none}
+  .sys-label{display:inline-flex;align-items:center;gap:6px;color:var(--muted);font-size:11px;font-weight:600}
+  .sys-value{font-size:14px;font-weight:800;color:var(--text)}
   /* Empty state */
   .empty{text-align:center;padding:60px 20px;color:var(--muted2);background:var(--card);border:1px dashed var(--border);border-radius:var(--radius)}
   .empty-icon{opacity:.3;margin-bottom:12px}
@@ -1092,12 +1150,31 @@ app.get('/admin/dashboard', (req, res) => {
   /* Responsive */
   @media(max-width:960px){
     .layout{grid-template-columns:1fr}
-    .sidebar{position:static;height:auto;flex-direction:row;overflow-x:auto;padding:12px;gap:8px}
+    .sidebar{position:static;height:auto;flex-direction:row;overflow-x:auto;padding:10px;gap:6px;-webkit-overflow-scrolling:touch}
     .brand{display:none}
     .nav{flex-direction:row;flex:none}
-    .nav-item{white-space:nowrap}
-    .logout-btn{white-space:nowrap}
-    .main{padding:20px}
+    .nav-item{white-space:nowrap;padding:8px 10px;font-size:12px}
+    .nav-badge{font-size:9px;padding:1px 6px}
+    .logout-btn{white-space:nowrap;padding:8px 10px;font-size:12px}
+    .main{padding:16px}
+    .hero{grid-template-columns:1fr;padding:20px;gap:20px}
+    .hero-title{font-size:22px}
+    .hero-sub{font-size:13px}
+    .hero-kpi{max-width:100%}
+    .kpi-value{font-size:32px}
+    .stats-grid{grid-template-columns:repeat(2,1fr);gap:10px}
+    .sc-value{font-size:24px}
+    .sc-icon{width:32px;height:32px;border-radius:10px;margin-bottom:10px}
+    .quick-actions{gap:6px}
+    .qa-btn{padding:8px 10px;font-size:11px;gap:6px}
+    .grid-two{grid-template-columns:1fr}
+    .bd-row{grid-template-columns:100px 1fr auto;gap:8px}
+    .bd-label{font-size:11px}
+    .bd-val{font-size:12px;min-width:50px}
+    .top-stats{flex-wrap:wrap;gap:4px}
+    .sys-grid{grid-template-columns:1fr}
+    .sys-item:nth-child(odd){padding-right:0;border-right:none}
+    .sys-item:nth-child(even){padding-left:0}
     .user-row{flex-wrap:wrap}
     .urow-info{width:100%;order:3}
     .urow-actions{width:100%;order:4;justify-content:flex-end}
@@ -1109,6 +1186,31 @@ app.get('/admin/dashboard', (req, res) => {
     .conv-row .btn-icon{order:3;margin-left:auto}
     .search-wrap{width:100%}
     .page-header{flex-direction:column;align-items:stretch}
+    .page-title{font-size:20px}
+    .panel-head{padding:14px 16px;flex-wrap:wrap;gap:8px}
+    .panel-body{padding:14px 16px}
+    .act-row{flex-wrap:wrap;gap:8px}
+    .act-side{flex-direction:row;align-items:center;width:100%;justify-content:flex-start;gap:8px}
+    .uc-head{flex-wrap:wrap;gap:8px}
+    .uc-head .pill{font-size:9px;padding:2px 6px}
+    .msg-item{flex-direction:column;gap:8px}
+    .msg-content{min-width:0;width:100%}
+    .msg-actions{width:100%}
+    .msg-actions textarea{width:100%}
+    .reply-form{gap:8px}
+    .modal-box{max-width:92vw;margin:20px;padding:24px}
+  }
+  @media(max-width:480px){
+    .stats-grid{grid-template-columns:1fr}
+    .hero{padding:16px;gap:14px}
+    .hero-title{font-size:19px}
+    .kpi-value{font-size:28px}
+    .main{padding:12px}
+    .nav-item{padding:6px 8px;font-size:11px}
+    .nav-item svg{display:none}
+    .qa-btn{flex:1;justify-content:center}
+    .top-user-row{flex-wrap:wrap;gap:6px}
+    .top-stats{width:100%;justify-content:flex-end}
   }
 </style></head><body>
 <div class="layout">
@@ -1176,15 +1278,21 @@ app.get('/admin/dashboard', (req, res) => {
         </div>
         <div class="stat-card sc-msgs">
           <div class="sc-icon">${svg(ICONS.inbox, '#fff', 20)}</div>
-          <div class="sc-label">Total messages</div>
+          <div class="sc-label">Support messages</div>
           <div class="sc-value">${totalContacts}</div>
           <div class="sc-delta up">+${msgs7d} this week</div>
+        </div>
+        <div class="stat-card sc-convs">
+          <div class="sc-icon">${svg(ICONS.msgCircle, '#fff', 20)}</div>
+          <div class="sc-label">Conversations</div>
+          <div class="sc-value">${totalConvs}</div>
+          <div class="sc-delta neutral">${totalMsgsInConvs} AI messages</div>
         </div>
         <div class="stat-card sc-pending">
           <div class="sc-icon">${svg(ICONS.clock, '#fff', 20)}</div>
           <div class="sc-label">Awaiting review</div>
           <div class="sc-value">${pendingCount}</div>
-          <div class="sc-delta neutral">${pct(pendingCount)}% of total</div>
+          <div class="sc-delta neutral">${unrepliedCount} unreplied</div>
         </div>
         <div class="stat-card sc-approved">
           <div class="sc-icon">${svg(ICONS.check, '#fff', 20)}</div>
@@ -1198,6 +1306,15 @@ app.get('/admin/dashboard', (req, res) => {
           <div class="sc-value">${rejectedCount}</div>
           <div class="sc-delta down">${pct(rejectedCount)}% of total</div>
         </div>
+      </div>
+
+      <!-- Quick actions -->
+      <div class="quick-actions">
+        <button class="qa-btn" onclick="showSection('messages', document.querySelector('[data-section=messages]'))">${svg(ICONS.inbox, 'currentColor', 16)}<span>Review messages</span><span class="qa-count">${pendingCount}</span></button>
+        <button class="qa-btn" onclick="showSection('users', document.querySelector('[data-section=users]'))">${svg(ICONS.users, 'currentColor', 16)}<span>Manage users</span><span class="qa-count">${users.length}</span></button>
+        <button class="qa-btn" onclick="showSection('conversations', document.querySelector('[data-section=conversations]'))">${svg(ICONS.msgCircle, 'currentColor', 16)}<span>View conversations</span><span class="qa-count">${totalConvs}</span></button>
+        <button class="qa-btn" onclick="exportCSV('users')">${svg(ICONS.dashboard, 'currentColor', 16)}<span>Export users CSV</span></button>
+        <button class="qa-btn" onclick="exportCSV('messages')">${svg(ICONS.mail, 'currentColor', 16)}<span>Export messages CSV</span></button>
       </div>
 
       <!-- Two column: breakdowns + activity -->
@@ -1252,6 +1369,121 @@ app.get('/admin/dashboard', (req, res) => {
               </div>`;
             }).join('')}
             <div class="panel-note">${googleTotal} user${googleTotal === 1 ? '' : 's'} connected a Google account</div>
+          </div>
+        </div>
+      </div>
+
+      <!-- Row 2: Country + Models -->
+      <div class="grid-two">
+        <!-- Country distribution -->
+        <div class="panel">
+          <div class="panel-head">
+            <div>
+              <div class="panel-title">Countries</div>
+              <div class="panel-sub">Top ${topCountries.length} user locations</div>
+            </div>
+            <span class="panel-ico">${svg(ICONS.globe, 'var(--muted)', 16)}</span>
+          </div>
+          <div class="panel-body">
+            ${topCountries.length ? topCountries.map(([country, n]) => {
+              const p = users.length ? Math.round((n / users.length) * 100) : 0;
+              return `<div class="bd-row">
+                <div class="bd-label">${svg(ICONS.globe, '#3b82f6', 14)}<span>${escapeHtml(country)}</span></div>
+                <div class="bd-bar"><div class="bd-fill" style="width:${p}%;background:#3b82f6"></div></div>
+                <div class="bd-val">${n}<span class="bd-pct">${p}%</span></div>
+              </div>`;
+            }).join('') : '<div class="empty-inline"><p>No data</p></div>'}
+          </div>
+        </div>
+
+        <!-- Model usage -->
+        <div class="panel">
+          <div class="panel-head">
+            <div>
+              <div class="panel-title">AI Models</div>
+              <div class="panel-sub">Most used models</div>
+            </div>
+            <span class="panel-ico">${svg(ICONS.msgCircle, 'var(--muted)', 16)}</span>
+          </div>
+          <div class="panel-body">
+            ${topModels.length ? topModels.map(([model, n]) => {
+              const p = totalConvs ? Math.round((n / totalConvs) * 100) : 0;
+              return `<div class="bd-row">
+                <div class="bd-label"><span class="conv-model" style="font-size:11px">${escapeHtml(model)}</span></div>
+                <div class="bd-bar"><div class="bd-fill" style="width:${p}%;background:#8b5cf6"></div></div>
+                <div class="bd-val">${n}<span class="bd-pct">${p}%</span></div>
+              </div>`;
+            }).join('') : '<div class="empty-inline"><p>No conversations yet</p></div>'}
+          </div>
+        </div>
+      </div>
+
+      <!-- Row 3: Top users + System info -->
+      <div class="grid-two">
+        <!-- Top active users -->
+        <div class="panel">
+          <div class="panel-head">
+            <div>
+              <div class="panel-title">Top users</div>
+              <div class="panel-sub">Most active by conversations</div>
+            </div>
+            <span class="panel-ico">${svg(ICONS.users, 'var(--muted)', 16)}</span>
+          </div>
+          <div class="panel-body">
+            ${topActiveUsers.length ? topActiveUsers.map((u, i) => {
+              const initials = String(u.name || '?').trim().split(/\\s+/).map(p => p[0]).slice(0, 2).join('').toUpperCase() || '?';
+              return `<div class="top-user-row">
+                <span class="top-rank">#${i + 1}</span>
+                <div class="avatar avatar-sm">${escapeHtml(initials)}</div>
+                <div class="top-meta">
+                  <div class="top-name">${escapeHtml(u.name)}</div>
+                  <div class="top-email">${escapeHtml(u.email)}</div>
+                </div>
+                <div class="top-stats">
+                  <span class="top-stat">${svg(ICONS.msgCircle, '#8b5cf6', 11)}${u.count} chats</span>
+                  <span class="top-stat">${svg(ICONS.message, '#3b82f6', 11)}${u.msgs} msgs</span>
+                </div>
+              </div>`;
+            }).join('') : '<div class="empty-inline"><p>No users yet</p></div>'}
+          </div>
+        </div>
+
+        <!-- System info -->
+        <div class="panel">
+          <div class="panel-head">
+            <div>
+              <div class="panel-title">System</div>
+              <div class="panel-sub">Platform information</div>
+            </div>
+            <span class="panel-ico">${svg(ICONS.dashboard, 'var(--muted)', 16)}</span>
+          </div>
+          <div class="panel-body">
+            <div class="sys-grid">
+              <div class="sys-item">
+                <div class="sys-label">${svg(ICONS.dashboard, '#666', 12)}Database</div>
+                <div class="sys-value">${dbSizeStr}</div>
+              </div>
+              <div class="sys-item">
+                <div class="sys-label">${svg(ICONS.users, '#666', 12)}Active users</div>
+                <div class="sys-value">${users.length - suspendedCount}</div>
+              </div>
+              <div class="sys-item">
+                <div class="sys-label">${svg(ICONS.lock, '#666', 12)}Suspended</div>
+                <div class="sys-value" style="color:#ef4444">${suspendedCount}</div>
+              </div>
+              <div class="sys-item">
+                <div class="sys-label">${svg(ICONS.msgCircle, '#666', 12)}AI messages</div>
+                <div class="sys-value">${totalMsgsInConvs}</div>
+              </div>
+              <div class="sys-item">
+                <div class="sys-label">${svg(ICONS.reply, '#666', 12)}Replied</div>
+                <div class="sys-value" style="color:#8b5cf6">${repliedCount}/${totalContacts}</div>
+              </div>
+              <div class="sys-item">
+                <div class="sys-label">${svg(ICONS.check, '#666', 12)}Response rate</div>
+                <div class="sys-value" style="color:#22c55e">${totalContacts ? Math.round((repliedCount / totalContacts) * 100) : 0}%</div>
+              </div>
+            </div>
           </div>
         </div>
       </div>
@@ -1539,6 +1771,40 @@ app.get('/admin/dashboard', (req, res) => {
         if(d.ok){ showToast('Conversation deleted', true); setTimeout(()=>location.reload(), 500); }
         else showToast(d.error || 'Failed', false);
       }).catch(()=>showToast('Network error', false));
+  }
+  function exportCSV(type){
+    const rows = [];
+    if(type === 'users'){
+      rows.push(['Name','Email','Country','Auth','Suspended','Created'].join(','));
+      document.querySelectorAll('.user-row').forEach(el => {
+        const name = el.querySelector('.urow-name')?.textContent?.trim() || '';
+        const email = el.querySelector('.urow-email')?.textContent?.trim() || '';
+        const country = el.querySelector('.urow-country')?.textContent?.trim() || '';
+        const auth = el.querySelector('.urow-auth')?.textContent?.trim()?.replace(/,/g,' ') || '';
+        const suspended = el.querySelector('.urow-suspended') ? 'Yes' : 'No';
+        const created = el.querySelector('.urow-date')?.textContent?.trim() || '';
+        rows.push([name,email,country,auth,suspended,created].map(c=>'"'+c.replace(/"/g,'""')+'"').join(','));
+      });
+    } else {
+      rows.push(['Subject','Type','Status','User','Email','Reply','Created'].join(','));
+      document.querySelectorAll('.msg-item').forEach(el => {
+        const subject = el.querySelector('.msg-subject')?.textContent?.trim() || '';
+        const mtype = el.querySelector('.msg-type')?.textContent?.trim() || '';
+        const status = el.querySelector('.pill')?.textContent?.trim() || '';
+        const user = el.getAttribute('data-user') || '';
+        const email = el.getAttribute('data-email') || '';
+        const reply = el.querySelector('.reply-text')?.textContent?.trim() || '';
+        const created = el.querySelector('.msg-date')?.textContent?.trim() || '';
+        rows.push([subject,mtype,status,user,email,reply,created].map(c=>'"'+c.replace(/"/g,'""')+'"').join(','));
+      });
+    }
+    if(rows.length <= 1){ showToast('No data to export', false); return; }
+    const blob = new Blob([rows.join('\\n')], { type:'text/csv' });
+    const a = document.createElement('a');
+    a.href = URL.createObjectURL(blob);
+    a.download = type + '_export_' + new Date().toISOString().slice(0,10) + '.csv';
+    a.click();
+    showToast('CSV exported (' + (rows.length-1) + ' rows)', true);
   }
 </script>
 </body></html>`);
