@@ -86,6 +86,9 @@ db.pragma('foreign_keys = ON');
 try { db.exec('ALTER TABLE users ADD COLUMN google_id TEXT'); } catch {}
 try { db.exec("ALTER TABLE contact_messages ADD COLUMN user_id INTEGER"); } catch {}
 try { db.exec("ALTER TABLE contact_messages ADD COLUMN status TEXT NOT NULL DEFAULT 'pending'"); } catch {}
+try { db.exec("ALTER TABLE users ADD COLUMN suspended INTEGER NOT NULL DEFAULT 0"); } catch {}
+try { db.exec("ALTER TABLE contact_messages ADD COLUMN admin_reply TEXT"); } catch {}
+try { db.exec("ALTER TABLE contact_messages ADD COLUMN replied_at DATETIME"); } catch {}
 
 // ── Middleware ────────────────────────────────────────────────────────────────
 const ALLOWED_ORIGINS = [
@@ -175,8 +178,9 @@ function verifyToken(req, res, next) {
   try {
     const decoded = jwt.verify(token, JWT_SECRET);
     // Check user still exists in DB — catches admin-deleted accounts immediately
-    const exists = db.prepare('SELECT id FROM users WHERE id = ?').get(decoded.id);
+    const exists = db.prepare('SELECT id, suspended FROM users WHERE id = ?').get(decoded.id);
     if (!exists) return res.status(401).json({ error: 'Account no longer exists' });
+    if (exists.suspended) return res.status(403).json({ error: 'Account suspended. Contact support.' });
     req.user = decoded;
     next();
   } catch {
@@ -534,6 +538,11 @@ function adminIcons() {
     calendar:   '<rect x="3" y="4" width="18" height="18" rx="2" ry="2"/><line x1="16" y1="2" x2="16" y2="6"/><line x1="8" y1="2" x2="8" y2="6"/><line x1="3" y1="10" x2="21" y2="10"/>',
     globe:      '<circle cx="12" cy="12" r="10"/><line x1="2" y1="12" x2="22" y2="12"/><path d="M12 2a15.3 15.3 0 0 1 4 10 15.3 15.3 0 0 1-4 10 15.3 15.3 0 0 1-4-10 15.3 15.3 0 0 1 4-10z"/>',
     shield:     '<path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/>',
+    reply:      '<polyline points="9 17 4 12 9 7"/><path d="M20 18v-2a4 4 0 0 0-4-4H4"/>',
+    lock:       '<rect x="3" y="11" width="18" height="11" rx="2" ry="2"/><path d="M7 11V7a5 5 0 0 1 10 0v4"/>',
+    unlock:     '<rect x="3" y="11" width="18" height="11" rx="2" ry="2"/><path d="M7 11V7a5 5 0 0 1 9.9-1"/>',
+    msgCircle:  '<path d="M21 11.5a8.38 8.38 0 0 1-.9 3.8 8.5 8.5 0 0 1-7.6 4.7 8.38 8.38 0 0 1-3.8-.9L3 21l1.9-5.7a8.38 8.38 0 0 1-.9-3.8 8.5 8.5 0 0 1 4.7-7.6 8.38 8.38 0 0 1 3.8-.9h.5a8.48 8.48 0 0 1 8 8v.5z"/>',
+    send:       '<line x1="22" y1="2" x2="11" y2="13"/><polygon points="22 2 15 22 11 13 2 9 22 2"/>',
   };
   return { svg, ICONS };
 }
@@ -627,8 +636,17 @@ app.get('/admin/users', (req, res) => {
 // ── GET /admin/dashboard ──────────────────────────────────────────────────────
 app.get('/admin/dashboard', (req, res) => {
   if (!isAdminAuthed(req)) return res.redirect('/admin');
-  const users = db.prepare('SELECT id, name, email, country, password_hash, google_id, created_at FROM users ORDER BY created_at DESC').all();
-  const contacts = db.prepare('SELECT id, type, subject, message, user_name, user_email, user_id, status, created_at FROM contact_messages ORDER BY created_at DESC').all();
+  const users = db.prepare('SELECT id, name, email, country, password_hash, google_id, suspended, created_at FROM users ORDER BY created_at DESC').all();
+  const contacts = db.prepare('SELECT id, type, subject, message, user_name, user_email, user_id, status, admin_reply, replied_at, created_at FROM contact_messages ORDER BY created_at DESC').all();
+  // Conversations summary for admin
+  const allConvs = db.prepare(`
+    SELECT c.id, c.user_id, c.title, c.model, c.created_at, c.updated_at,
+           u.name AS user_name, u.email AS user_email,
+           json_array_length(c.messages) AS message_count
+    FROM conversations c
+    LEFT JOIN users u ON u.id = c.user_id
+    ORDER BY c.updated_at DESC
+  `).all();
   const { svg, ICONS } = adminIcons();
 
   // Stats
@@ -654,6 +672,9 @@ app.get('/admin/dashboard', (req, res) => {
   const pwOnlyUsers = users.filter(u => !u.google_id && hasRealPw(u)).length;
   const dualUsers   = users.filter(u => u.google_id && hasRealPw(u)).length;
   const googleTotal = users.filter(u => u.google_id).length;
+  const suspendedCount = users.filter(u => u.suspended).length;
+  const totalConvs = allConvs.length;
+  const totalMsgsInConvs = allConvs.reduce((s, c) => s + (c.message_count || 0), 0);
 
   // Recent activity
   const recentContacts = [...contacts]
@@ -733,6 +754,7 @@ app.get('/admin/dashboard', (req, res) => {
 
     const msgItems = g.messages.map(c => {
       const locked = c.status !== 'pending';
+      const hasReply = c.admin_reply && c.admin_reply.trim();
       return `
       <div class="msg-item" id="crow-${c.id}">
         <div class="msg-top">
@@ -743,12 +765,25 @@ app.get('/admin/dashboard', (req, res) => {
         </div>
         <div class="msg-subject">${escapeHtml(c.subject)}</div>
         <div class="msg-body">${escapeHtml(c.message)}</div>
+        ${hasReply ? `
+        <div class="admin-reply-box">
+          <div class="admin-reply-head">${svg(ICONS.reply, '#8b5cf6', 12)}<span>Admin reply</span><span class="admin-reply-date">${escapeHtml(c.replied_at || '')}</span></div>
+          <div class="admin-reply-text">${escapeHtml(c.admin_reply)}</div>
+        </div>` : ''}
         <div class="msg-actions" id="cactions-${c.id}">
           ${locked
             ? `<span class="locked">${svg(ICONS.shield, '#555', 12)} Decision locked</span>`
             : `<button class="btn btn-approve" onclick="setStatus(${c.id},'approved')">${svg(ICONS.check, '#fff', 13)}Approve</button>
                <button class="btn btn-reject" onclick="setStatus(${c.id},'rejected')">${svg(ICONS.x, '#fff', 13)}Reject</button>`
           }
+          <button class="btn btn-reply" onclick="toggleReplyBox(${c.id})">${svg(ICONS.reply, '#fff', 13)}${hasReply ? 'Edit reply' : 'Reply'}</button>
+        </div>
+        <div class="reply-form" id="replyForm-${c.id}" style="display:none">
+          <textarea id="replyText-${c.id}" class="reply-textarea" placeholder="Write your reply to the user…" rows="3">${hasReply ? escapeHtml(c.admin_reply) : ''}</textarea>
+          <div class="reply-form-actions">
+            <button class="btn btn-sm" onclick="document.getElementById('replyForm-${c.id}').style.display='none'">Cancel</button>
+            <button class="btn btn-sm btn-send" onclick="sendReply(${c.id})">${svg(ICONS.send, '#fff', 12)}Send reply</button>
+          </div>
         </div>
       </div>`;
     }).join('');
@@ -782,21 +817,28 @@ app.get('/admin/dashboard', (req, res) => {
     else if (hasRealPassword)          authBadge = `<span class="auth-pill auth-pw">${svg(ICONS.key, '#eab308', 11)}Password</span>`;
     else                               authBadge = `<span class="auth-pill auth-none">${svg(ICONS.alert, '#f59e0b', 11)}None</span>`;
     const initials = String(u.name || '?').trim().split(/\s+/).map(p => p[0]).slice(0, 2).join('').toUpperCase() || '?';
+    const userConvCount = allConvs.filter(c => c.user_id === u.id).length;
     return `
-    <div class="user-row" data-search="${escapeHtml((u.name + ' ' + u.email).toLowerCase())}">
+    <div class="user-row ${u.suspended ? 'user-suspended' : ''}" data-search="${escapeHtml((u.name + ' ' + u.email).toLowerCase())}">
       <div class="avatar avatar-sm">${escapeHtml(initials)}</div>
       <div class="urow-meta">
-        <div class="urow-name">${escapeHtml(u.name)}</div>
+        <div class="urow-name">${escapeHtml(u.name)}${u.suspended ? ` <span class="suspend-badge">${svg(ICONS.lock, '#ef4444', 10)} Suspended</span>` : ''}</div>
         <div class="urow-email">${escapeHtml(u.email)}</div>
       </div>
       <div class="urow-info">
         <span class="info-item">${svg(ICONS.globe, '#666', 12)}${escapeHtml(u.country || '—')}</span>
+        <span class="info-item">${svg(ICONS.msgCircle, '#666', 12)}${userConvCount} chats</span>
         <span class="info-item">${svg(ICONS.calendar, '#666', 12)}${escapeHtml(u.created_at || '—')}</span>
         ${authBadge}
       </div>
-      <button class="btn-icon btn-danger" onclick="deleteUser(${u.id}, '${escapeHtml(u.name).replace(/'/g,"\\'")}', '${escapeHtml(u.email).replace(/'/g,"\\'")}')" title="Delete user">
-        ${svg(ICONS.trash, '#ef4444', 15)}
-      </button>
+      <div class="urow-actions">
+        <button class="btn-icon ${u.suspended ? 'btn-unsuspend' : 'btn-suspend'}" onclick="toggleSuspend(${u.id}, '${escapeHtml(u.name).replace(/'/g,"\\'")}', ${u.suspended ? 'true' : 'false'})" title="${u.suspended ? 'Unsuspend' : 'Suspend'} user">
+          ${u.suspended ? svg(ICONS.unlock, '#22c55e', 15) : svg(ICONS.lock, '#f59e0b', 15)}
+        </button>
+        <button class="btn-icon btn-danger" onclick="deleteUser(${u.id}, '${escapeHtml(u.name).replace(/'/g,"\\'")}', '${escapeHtml(u.email).replace(/'/g,"\\'")}')" title="Delete user">
+          ${svg(ICONS.trash, '#ef4444', 15)}
+        </button>
+      </div>
     </div>`;
   }).join('');
 
@@ -979,6 +1021,36 @@ app.get('/admin/dashboard', (req, res) => {
   .btn-icon{width:34px;height:34px;border-radius:8px;border:1px solid var(--border);background:transparent;cursor:pointer;display:flex;align-items:center;justify-content:center;transition:all .15s}
   .btn-icon:hover{background:var(--card2)}
   .btn-danger:hover{background:#ef444418;border-color:#ef444440}
+  .btn-suspend:hover{background:#f59e0b18;border-color:#f59e0b40}
+  .btn-unsuspend:hover{background:#22c55e18;border-color:#22c55e40}
+  .urow-actions{display:flex;gap:6px;flex-shrink:0}
+  .user-suspended{opacity:.65;border-color:#ef444440}
+  .user-suspended .avatar{background:linear-gradient(135deg,#555,#333)}
+  .suspend-badge{display:inline-flex;align-items:center;gap:3px;font-size:9px;font-weight:700;color:#ef4444;text-transform:uppercase;letter-spacing:.5px;margin-left:4px;padding:1px 6px;background:#ef444412;border:1px solid #ef444430;border-radius:6px}
+  /* Admin reply */
+  .admin-reply-box{background:linear-gradient(135deg,#8b5cf612,#8b5cf606);border:1px solid #8b5cf630;border-radius:10px;padding:12px 14px;margin-bottom:10px}
+  .admin-reply-head{display:flex;align-items:center;gap:6px;font-size:10px;font-weight:700;color:#8b5cf6;text-transform:uppercase;letter-spacing:1px;margin-bottom:6px}
+  .admin-reply-date{margin-left:auto;color:var(--muted2);font-weight:400;text-transform:none;letter-spacing:0}
+  .admin-reply-text{color:#c4b5fd;font-size:12.5px;line-height:1.55;white-space:pre-wrap;word-break:break-word}
+  /* Reply form */
+  .reply-form{margin-top:10px;padding-top:10px;border-top:1px dashed var(--border-soft)}
+  .reply-textarea{width:100%;padding:10px 12px;background:#0a0a0a;border:1px solid var(--border);border-radius:10px;color:var(--text);font-size:13px;outline:none;font-family:inherit;resize:vertical;transition:border-color .15s;min-height:70px}
+  .reply-textarea:focus{border-color:#8b5cf6}
+  .reply-form-actions{display:flex;gap:8px;margin-top:8px;justify-content:flex-end}
+  .btn-sm{padding:6px 12px;font-size:11px;border-radius:8px}
+  .btn-reply{background:#8b5cf6;color:#fff}
+  .btn-reply:hover{background:#7c3aed}
+  .btn-send{background:linear-gradient(135deg,#8b5cf6,#6d28d9);color:#fff}
+  .btn-send:hover{background:linear-gradient(135deg,#7c3aed,#5b21b6)}
+  /* Conversation rows */
+  .conv-row{display:flex;align-items:center;gap:14px;padding:14px 18px;background:var(--card);border:1px solid var(--border);border-radius:12px;margin-bottom:8px;transition:all .15s}
+  .conv-row:hover{border-color:#333;background:var(--card2)}
+  .conv-main{flex:1;min-width:0}
+  .conv-title{font-weight:700;font-size:13px;display:inline-flex;align-items:center;gap:6px;color:var(--text);overflow:hidden;text-overflow:ellipsis;white-space:nowrap;max-width:100%}
+  .conv-title span{overflow:hidden;text-overflow:ellipsis}
+  .conv-meta{color:var(--muted);font-size:11px;margin-top:2px}
+  .conv-info{display:flex;gap:12px;align-items:center;flex-wrap:wrap;flex-shrink:0}
+  .conv-model{padding:2px 8px;background:rgba(139,92,246,.1);border:1px solid rgba(139,92,246,.25);border-radius:6px;color:#a78bfa;font-size:10px;font-weight:700}
   /* Empty state */
   .empty{text-align:center;padding:60px 20px;color:var(--muted2);background:var(--card);border:1px dashed var(--border);border-radius:var(--radius)}
   .empty-icon{opacity:.3;margin-bottom:12px}
@@ -1048,7 +1120,11 @@ app.get('/admin/dashboard', (req, res) => {
       </button>
       <button class="nav-item" data-section="users" onclick="showSection('users',this)">
         ${svg(ICONS.users, 'currentColor', 16)}<span>Users</span>
-        <span class="nav-badge">${users.length}</span>
+        <span class="nav-badge">${users.length}${suspendedCount ? `<span style="color:#ef4444;margin-left:3px">(${suspendedCount})</span>` : ''}</span>
+      </button>
+      <button class="nav-item" data-section="conversations" onclick="showSection('conversations',this)">
+        ${svg(ICONS.msgCircle, 'currentColor', 16)}<span>Conversations</span>
+        <span class="nav-badge">${totalConvs}</span>
       </button>
     </nav>
     <button class="logout-btn" onclick="logout()">
@@ -1219,7 +1295,7 @@ app.get('/admin/dashboard', (req, res) => {
       <div class="page-header">
         <div>
           <div class="page-title">Users</div>
-          <div class="page-sub">${users.length} registered account${users.length === 1 ? '' : 's'}</div>
+          <div class="page-sub">${users.length} registered account${users.length === 1 ? '' : 's'}${suspendedCount ? ` · <span style="color:#ef4444;font-weight:700">${suspendedCount} suspended</span>` : ''}</div>
         </div>
         <div class="search-wrap">
           <span class="search-icon">${svg(ICONS.search, '#555', 15)}</span>
@@ -1227,6 +1303,41 @@ app.get('/admin/dashboard', (req, res) => {
         </div>
       </div>
       ${userRows || `<div class="empty"><p>No users yet</p></div>`}
+    </section>
+
+    <!-- Conversations -->
+    <section class="section" id="sec-conversations">
+      <div class="page-header">
+        <div>
+          <div class="page-title">Conversations</div>
+          <div class="page-sub">${totalConvs} conversation${totalConvs === 1 ? '' : 's'} · ${totalMsgsInConvs} total messages</div>
+        </div>
+        <div class="search-wrap">
+          <span class="search-icon">${svg(ICONS.search, '#555', 15)}</span>
+          <input class="search-input" id="convSearch" placeholder="Search conversations…" oninput="filterCards('convSearch','.conv-row')">
+        </div>
+      </div>
+      ${allConvs.length ? allConvs.map(c => {
+        const cInitials = String(c.user_name || '?').trim().split(/\\s+/).map(p => p[0]).slice(0, 2).join('').toUpperCase() || '?';
+        const modelShort = (c.model || '').split('/').pop() || c.model || '—';
+        const updatedDate = c.updated_at ? new Date(c.updated_at).toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric', hour: '2-digit', minute: '2-digit' }) : '—';
+        return `
+      <div class="conv-row" data-search="${escapeHtml(((c.user_name || '') + ' ' + (c.user_email || '') + ' ' + (c.title || '')).toLowerCase())}">
+        <div class="avatar avatar-sm">${escapeHtml(cInitials)}</div>
+        <div class="conv-main">
+          <div class="conv-title">${svg(ICONS.msgCircle, 'var(--muted)', 12)}<span>${escapeHtml(c.title || 'Untitled')}</span></div>
+          <div class="conv-meta">${escapeHtml(c.user_name || 'Unknown')} · ${escapeHtml(c.user_email || '—')}</div>
+        </div>
+        <div class="conv-info">
+          <span class="info-item">${svg(ICONS.message, '#666', 12)}${c.message_count || 0} msgs</span>
+          <span class="info-item conv-model">${escapeHtml(modelShort)}</span>
+          <span class="info-item">${svg(ICONS.clock, '#666', 12)}${escapeHtml(updatedDate)}</span>
+        </div>
+        <button class="btn-icon btn-danger" onclick="deleteConv('${escapeHtml(c.id)}', '${escapeHtml(c.title || 'Untitled').replace(/'/g,"\\'")}')" title="Delete conversation">
+          ${svg(ICONS.trash, '#ef4444', 15)}
+        </button>
+      </div>`;
+      }).join('') : `<div class="empty"><p>No conversations yet</p></div>`}
     </section>
   </main>
 </div>
@@ -1370,6 +1481,55 @@ app.get('/admin/dashboard', (req, res) => {
         else showToast(d.error || 'Failed', false);
       }).catch(()=>showToast('Network error', false));
   }
+  async function toggleSuspend(id, name, isSuspended){
+    const action = isSuspended ? 'unsuspend' : 'suspend';
+    const cfg = isSuspended
+      ? { variant:'success', icon:'check', title:'Unsuspend user', confirmText:'Unsuspend', message:'This user will be able to sign in and use the platform again.' }
+      : { variant:'warn', icon:'alert', title:'Suspend user', confirmText:'Suspend', message:'This user will be immediately blocked from using the platform. They can be unsuspended later.' };
+    const ok = await showConfirm({ ...cfg, subtitle: name });
+    if(!ok) return;
+    fetch('/admin/users/'+id+'/suspend', {
+      method:'PATCH',
+      headers:{'Content-Type':'application/json'},
+      credentials:'include',
+      body: JSON.stringify({ suspended: !isSuspended })
+    }).then(r=>r.json()).then(d=>{
+      if(d.ok){ showToast(name + ' ' + action + 'ed', true); setTimeout(()=>location.reload(), 500); }
+      else showToast(d.error || 'Failed', false);
+    }).catch(()=>showToast('Network error', false));
+  }
+  function toggleReplyBox(id){
+    const el = document.getElementById('replyForm-'+id);
+    if(el) el.style.display = el.style.display === 'none' ? 'block' : 'none';
+  }
+  async function sendReply(id){
+    const text = document.getElementById('replyText-'+id)?.value?.trim();
+    if(!text || text.length < 2){ showToast('Reply too short', false); return; }
+    fetch('/admin/contact/'+id+'/reply', {
+      method:'POST',
+      headers:{'Content-Type':'application/json'},
+      credentials:'include',
+      body: JSON.stringify({ reply: text })
+    }).then(r=>r.json()).then(d=>{
+      if(d.ok){ showToast('Reply sent', true); setTimeout(()=>location.reload(), 500); }
+      else showToast(d.error || 'Failed', false);
+    }).catch(()=>showToast('Network error', false));
+  }
+  async function deleteConv(id, title){
+    const ok = await showConfirm({
+      variant:'danger', icon:'trash',
+      title:'Delete conversation',
+      subtitle:'This cannot be undone',
+      message:'The conversation "' + title + '" and all its data will be permanently removed.',
+      confirmText:'Delete',
+    });
+    if(!ok) return;
+    fetch('/admin/conversations/'+encodeURIComponent(id), { method:'DELETE', credentials:'include' })
+      .then(r=>r.json()).then(d=>{
+        if(d.ok){ showToast('Conversation deleted', true); setTimeout(()=>location.reload(), 500); }
+        else showToast(d.error || 'Failed', false);
+      }).catch(()=>showToast('Network error', false));
+  }
 </script>
 </body></html>`);
 });
@@ -1406,7 +1566,7 @@ app.get('/api/contact/my', verifyToken, (req, res) => {
   try {
     // Match by user_id (new reports) OR by email as fallback (old reports before migration)
     const rows = db.prepare(
-      `SELECT id, type, subject, status, created_at FROM contact_messages
+      `SELECT id, type, subject, status, admin_reply, replied_at, created_at FROM contact_messages
        WHERE user_id = ? OR (user_id IS NULL AND user_email = ?)
        ORDER BY created_at DESC`
     ).all(req.user.id, req.user.email);
@@ -1475,6 +1635,67 @@ app.post('/admin/contact/cleanup-orphans', requireAdmin, (req, res) => {
   } catch (err) {
     console.error('Cleanup orphans error:', err.message);
     res.status(500).json({ error: err.message || 'Failed to cleanup' });
+  }
+});
+
+// ── PATCH /admin/users/:id/suspend ─────────────────────────────────────────
+app.patch('/admin/users/:id/suspend', requireAdmin, (req, res) => {
+  const id = parseInt(req.params.id, 10);
+  const { suspended } = req.body; // true or false
+  if (!id) return res.status(400).json({ error: 'Invalid id' });
+  if (typeof suspended !== 'boolean') return res.status(400).json({ error: 'suspended must be boolean' });
+  const user = db.prepare('SELECT id, name FROM users WHERE id = ?').get(id);
+  if (!user) return res.status(404).json({ error: 'User not found' });
+  db.prepare('UPDATE users SET suspended = ? WHERE id = ?').run(suspended ? 1 : 0, id);
+  console.log(`${suspended ? '🔒' : '🔓'} Admin ${suspended ? 'suspended' : 'unsuspended'} user (id=${id}, name=${user.name})`);
+  res.json({ ok: true, suspended });
+});
+
+// ── POST /admin/contact/:id/reply ───────────────────────────────────────────
+app.post('/admin/contact/:id/reply', requireAdmin, (req, res) => {
+  const id = parseInt(req.params.id, 10);
+  const { reply } = req.body;
+  if (!id) return res.status(400).json({ error: 'Invalid id' });
+  if (!reply || typeof reply !== 'string' || reply.trim().length < 2) return res.status(400).json({ error: 'Reply too short' });
+  const msg = db.prepare('SELECT id FROM contact_messages WHERE id = ?').get(id);
+  if (!msg) return res.status(404).json({ error: 'Message not found' });
+  db.prepare('UPDATE contact_messages SET admin_reply = ?, replied_at = CURRENT_TIMESTAMP WHERE id = ?')
+    .run(reply.trim().slice(0, 3000), id);
+  console.log(`💬 Admin replied to contact message #${id}`);
+  res.json({ ok: true });
+});
+
+// ── GET /admin/conversations ─────────────────────────────────────────────────
+// Lists all conversations for admin (summary only — no message bodies)
+app.get('/admin/conversations', requireAdmin, (req, res) => {
+  try {
+    const rows = db.prepare(`
+      SELECT c.id, c.user_id, c.title, c.model, c.created_at, c.updated_at,
+             u.name AS user_name, u.email AS user_email,
+             json_array_length(c.messages) AS message_count
+      FROM conversations c
+      LEFT JOIN users u ON u.id = c.user_id
+      ORDER BY c.updated_at DESC
+    `).all();
+    res.json(rows);
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// ── DELETE /admin/conversations/:id ──────────────────────────────────────────
+app.delete('/admin/conversations/:id', requireAdmin, (req, res) => {
+  const { id } = req.params;
+  if (!id) return res.status(400).json({ error: 'Invalid id' });
+  try {
+    const conv = db.prepare('SELECT user_id FROM conversations WHERE id = ?').get(id);
+    if (!conv) return res.status(404).json({ error: 'Not found' });
+    db.prepare('DELETE FROM reactions WHERE conversation_id = ?').run(id);
+    db.prepare('DELETE FROM conversations WHERE id = ?').run(id);
+    console.log(`🗑️ Admin deleted conversation (id=${id})`);
+    res.json({ ok: true });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
   }
 });
 
