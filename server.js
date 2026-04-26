@@ -773,18 +773,20 @@ app.get('/admin/dashboard', (req, res) => {
         <div class="msg-actions" id="cactions-${c.id}">
           ${locked
             ? `<span class="locked">${svg(ICONS.shield, '#555', 12)} Decision locked</span>`
-            : `<button class="btn btn-approve" onclick="setStatus(${c.id},'approved')">${svg(ICONS.check, '#fff', 13)}Approve</button>
-               <button class="btn btn-reject" onclick="setStatus(${c.id},'rejected')">${svg(ICONS.x, '#fff', 13)}Reject</button>`
+            : (hasReply
+              ? `<button class="btn btn-approve" onclick="setStatus(${c.id},'approved')">${svg(ICONS.check, '#fff', 13)}Approve</button>
+                 <button class="btn btn-reject" onclick="setStatus(${c.id},'rejected')">${svg(ICONS.x, '#fff', 13)}Reject</button>`
+              : `<span class="reply-hint">${svg(ICONS.reply, '#f59e0b', 12)} Reply first to approve or reject</span>`)
           }
-          <button class="btn btn-reply" onclick="toggleReplyBox(${c.id})">${svg(ICONS.reply, '#fff', 13)}${hasReply ? 'Edit reply' : 'Reply'}</button>
+          ${!locked ? `<button class="btn btn-reply" onclick="toggleReplyBox(${c.id})">${svg(ICONS.reply, '#fff', 13)}${hasReply ? 'Edit reply' : 'Reply'}</button>` : ''}
         </div>
-        <div class="reply-form" id="replyForm-${c.id}" style="display:none">
+        ${!locked ? `<div class="reply-form" id="replyForm-${c.id}" style="display:none">
           <textarea id="replyText-${c.id}" class="reply-textarea" placeholder="Write your reply to the user…" rows="3">${hasReply ? escapeHtml(c.admin_reply) : ''}</textarea>
           <div class="reply-form-actions">
             <button class="btn btn-sm" onclick="document.getElementById('replyForm-${c.id}').style.display='none'">Cancel</button>
             <button class="btn btn-sm btn-send" onclick="sendReply(${c.id})">${svg(ICONS.send, '#fff', 12)}Send reply</button>
           </div>
-        </div>
+        </div>` : ''}
       </div>`;
     }).join('');
 
@@ -1033,6 +1035,7 @@ app.get('/admin/dashboard', (req, res) => {
   .admin-reply-date{margin-left:auto;color:var(--muted2);font-weight:400;text-transform:none;letter-spacing:0}
   .admin-reply-text{color:#c4b5fd;font-size:12.5px;line-height:1.55;white-space:pre-wrap;word-break:break-word}
   /* Reply form */
+  .reply-hint{display:inline-flex;align-items:center;gap:6px;color:#f59e0b;font-size:11px;font-weight:600;font-style:italic;padding:7px 2px}
   .reply-form{margin-top:10px;padding-top:10px;border-top:1px dashed var(--border-soft)}
   .reply-textarea{width:100%;padding:10px 12px;background:#0a0a0a;border:1px solid var(--border);border-radius:10px;color:var(--text);font-size:13px;outline:none;font-family:inherit;resize:vertical;transition:border-color .15s;min-height:70px}
   .reply-textarea:focus{border-color:#8b5cf6}
@@ -1604,10 +1607,13 @@ app.patch('/admin/contact/:id/status', requireAdmin, (req, res) => {
   if (!id) return res.status(400).json({ error: 'Invalid id' });
   if (!['approved', 'rejected'].includes(status)) return res.status(400).json({ error: 'Invalid status' });
   try {
-    const current = db.prepare('SELECT status FROM contact_messages WHERE id = ?').get(id);
+    const current = db.prepare('SELECT status, admin_reply FROM contact_messages WHERE id = ?').get(id);
     if (!current) return res.status(404).json({ error: 'Message not found' });
     if (current.status !== 'pending') {
       return res.status(409).json({ error: `Already ${current.status} — decision is final` });
+    }
+    if (!current.admin_reply || !current.admin_reply.trim()) {
+      return res.status(400).json({ error: 'You must reply to this message before making a decision' });
     }
     db.prepare('UPDATE contact_messages SET status = ? WHERE id = ?').run(status, id);
     res.json({ ok: true, status });
