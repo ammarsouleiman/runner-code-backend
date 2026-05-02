@@ -826,7 +826,7 @@ app.get('/admin/dashboard', (req, res) => {
     const groupId = g.user ? `u${g.user.id}` : `e${encodeURIComponent(email)}`;
 
     const msgItems = g.messages.map(c => {
-      const isPending = c.status === 'pending';
+      const locked = c.status !== 'pending';
       const hasReply = c.admin_reply && c.admin_reply.trim();
       return `
       <div class="msg-item" id="crow-${c.id}" data-status="${escapeHtml(c.status)}" data-user="${escapeHtml(g.messages[0]?.user_name || name || '')}" data-email="${escapeHtml(g.messages[0]?.user_email || email || '')}">
@@ -844,21 +844,20 @@ app.get('/admin/dashboard', (req, res) => {
           <div class="admin-reply-text reply-text">${escapeHtml(c.admin_reply)}</div>
         </div>` : ''}
         <div class="msg-actions" id="cactions-${c.id}">
-          ${isPending
-            ? `<button class="btn btn-approve" onclick="setStatus(${c.id},'approved')">${svg(ICONS.check, '#fff', 13)}Approve</button>
-               <button class="btn btn-reject" onclick="setStatus(${c.id},'rejected')">${svg(ICONS.x, '#fff', 13)}Reject</button>
-               <span class="reply-hint">${svg(ICONS.shield, '#f59e0b', 12)} Approve or reject first to send a reply</span>`
-            : `<span class="locked">${svg(ICONS.shield, '#555', 12)} Decision locked</span>
+          ${locked
+            ? `<span class="locked">${svg(ICONS.shield, '#555', 12)} Decision locked</span>
                <button class="btn btn-reply" onclick="toggleReplyBox(${c.id})">${svg(ICONS.reply, '#fff', 13)}${hasReply ? 'Edit reply' : 'Reply'}</button>`
+            : `<button class="btn btn-reply" onclick="toggleReplyBox(${c.id})">${svg(ICONS.reply, '#fff', 13)}${hasReply ? 'Edit reply' : 'Reply'}</button>
+               <span class="reply-hint">${svg(ICONS.shield, '#f59e0b', 12)} Reply will be sent together with Approve or Reject</span>`
           }
         </div>
-        ${!isPending ? `<div class="reply-form" id="replyForm-${c.id}" style="display:none">
+        <div class="reply-form" id="replyForm-${c.id}" style="display:none">
           <textarea id="replyText-${c.id}" class="reply-textarea" placeholder="Write your reply to the user…" rows="3">${hasReply ? escapeHtml(c.admin_reply) : ''}</textarea>
           <div class="reply-form-actions">
             <button class="btn btn-sm" onclick="document.getElementById('replyForm-${c.id}').style.display='none'">Cancel</button>
             <button class="btn btn-sm btn-send" onclick="sendReply(${c.id})">${svg(ICONS.send, '#fff', 12)}Send reply</button>
           </div>
-        </div>` : ''}
+        </div>
       </div>`;
     }).join('');
 
@@ -2089,6 +2088,24 @@ app.get('/admin/dashboard', (req, res) => {
     const text = document.getElementById('replyText-'+id)?.value?.trim();
     if(!text || text.length < 2){ showToast('Reply too short', false); return; }
     try {
+      // If the report is still pending, ask the admin to make a decision first.
+      // The reply is then dispatched together with the approve/reject so that
+      // the user receives them at the same time.
+      const row = document.getElementById('crow-'+id);
+      const isPending = row?.dataset?.status === 'pending';
+      if (isPending) {
+        const choice = await showStatusPicker();
+        if (choice !== 'approved' && choice !== 'rejected') {
+          showToast('A decision (approve/reject) is required to send the reply', false);
+          return;
+        }
+        const sr = await fetch('/admin/contact/'+id+'/status', {
+          method:'PATCH', headers:{'Content-Type':'application/json'}, credentials:'include',
+          body: JSON.stringify({ status: choice })
+        });
+        const sd = await sr.json();
+        if(!sd.ok){ showToast(sd.error || 'Failed to update status', false); return; }
+      }
       const r = await fetch('/admin/contact/'+id+'/reply', {
         method:'POST',
         headers:{'Content-Type':'application/json'},
@@ -2097,7 +2114,7 @@ app.get('/admin/dashboard', (req, res) => {
       });
       const d = await r.json();
       if(!d.ok){ showToast(d.error || 'Failed', false); return; }
-      showToast('Reply sent', true);
+      showToast(isPending ? 'Decision saved & reply sent' : 'Reply sent', true);
       setTimeout(()=>location.reload(), 500);
     } catch(e){ showToast('Network error', false); }
   }
