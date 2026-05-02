@@ -89,6 +89,7 @@ try { db.exec("ALTER TABLE contact_messages ADD COLUMN status TEXT NOT NULL DEFA
 try { db.exec("ALTER TABLE users ADD COLUMN suspended INTEGER NOT NULL DEFAULT 0"); } catch {}
 try { db.exec("ALTER TABLE contact_messages ADD COLUMN admin_reply TEXT"); } catch {}
 try { db.exec("ALTER TABLE contact_messages ADD COLUMN replied_at DATETIME"); } catch {}
+try { db.exec("ALTER TABLE contact_messages ADD COLUMN seen_at DATETIME"); } catch {}
 
 // ── Middleware ────────────────────────────────────────────────────────────────
 const ALLOWED_ORIGINS = [
@@ -2255,7 +2256,7 @@ app.get('/api/contact/my', verifyToken, (req, res) => {
   try {
     // Match by user_id (new reports) OR by email as fallback (old reports before migration)
     const rows = db.prepare(
-      `SELECT id, type, subject, status, admin_reply, replied_at, created_at FROM contact_messages
+      `SELECT id, type, subject, status, admin_reply, replied_at, seen_at, created_at FROM contact_messages
        WHERE user_id = ? OR (user_id IS NULL AND user_email = ?)
        ORDER BY created_at DESC`
     ).all(req.user.id, req.user.email);
@@ -2263,6 +2264,36 @@ app.get('/api/contact/my', verifyToken, (req, res) => {
   } catch (err) {
     console.error('GET /api/contact/my error:', err.message);
     res.status(500).json({ error: 'Failed to load' });
+  }
+});
+
+// ── GET /api/notifications/count — number of unread admin replies ──────────
+app.get('/api/notifications/count', verifyToken, (req, res) => {
+  try {
+    const row = db.prepare(
+      `SELECT COUNT(*) AS count FROM contact_messages
+       WHERE (user_id = ? OR (user_id IS NULL AND user_email = ?))
+         AND admin_reply IS NOT NULL AND seen_at IS NULL`
+    ).get(req.user.id, req.user.email);
+    res.json({ count: row?.count || 0 });
+  } catch (err) {
+    console.error('GET /api/notifications/count error:', err.message);
+    res.status(500).json({ error: 'Failed to load' });
+  }
+});
+
+// ── POST /api/notifications/mark-seen — mark all unread replies as seen ────
+app.post('/api/notifications/mark-seen', verifyToken, (req, res) => {
+  try {
+    db.prepare(
+      `UPDATE contact_messages SET seen_at = CURRENT_TIMESTAMP
+       WHERE (user_id = ? OR (user_id IS NULL AND user_email = ?))
+         AND admin_reply IS NOT NULL AND seen_at IS NULL`
+    ).run(req.user.id, req.user.email);
+    res.json({ ok: true });
+  } catch (err) {
+    console.error('POST /api/notifications/mark-seen error:', err.message);
+    res.status(500).json({ error: 'Failed to update' });
   }
 });
 
