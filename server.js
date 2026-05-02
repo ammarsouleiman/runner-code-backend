@@ -826,10 +826,10 @@ app.get('/admin/dashboard', (req, res) => {
     const groupId = g.user ? `u${g.user.id}` : `e${encodeURIComponent(email)}`;
 
     const msgItems = g.messages.map(c => {
-      const locked = c.status !== 'pending';
+      const isPending = c.status === 'pending';
       const hasReply = c.admin_reply && c.admin_reply.trim();
       return `
-      <div class="msg-item" id="crow-${c.id}" data-user="${escapeHtml(g.messages[0]?.user_name || name || '')}" data-email="${escapeHtml(g.messages[0]?.user_email || email || '')}">
+      <div class="msg-item" id="crow-${c.id}" data-status="${escapeHtml(c.status)}" data-user="${escapeHtml(g.messages[0]?.user_name || name || '')}" data-email="${escapeHtml(g.messages[0]?.user_email || email || '')}">
         <div class="msg-top">
           <span class="type-dot" style="background:${typeColorDot[c.type] || '#94a3b8'}"></span>
           <span class="type-label msg-type">${typeIcon[c.type] || typeIcon.other}${escapeHtml(c.type)}</span>
@@ -844,16 +844,15 @@ app.get('/admin/dashboard', (req, res) => {
           <div class="admin-reply-text reply-text">${escapeHtml(c.admin_reply)}</div>
         </div>` : ''}
         <div class="msg-actions" id="cactions-${c.id}">
-          ${locked
-            ? `<span class="locked">${svg(ICONS.shield, '#555', 12)} Decision locked</span>`
-            : (hasReply
-              ? `<button class="btn btn-approve" onclick="setStatus(${c.id},'approved')">${svg(ICONS.check, '#fff', 13)}Approve</button>
-                 <button class="btn btn-reject" onclick="setStatus(${c.id},'rejected')">${svg(ICONS.x, '#fff', 13)}Reject</button>`
-              : `<span class="reply-hint">${svg(ICONS.reply, '#f59e0b', 12)} Reply first to approve or reject</span>`)
+          ${isPending
+            ? `<button class="btn btn-approve" onclick="setStatus(${c.id},'approved')">${svg(ICONS.check, '#fff', 13)}Approve</button>
+               <button class="btn btn-reject" onclick="setStatus(${c.id},'rejected')">${svg(ICONS.x, '#fff', 13)}Reject</button>
+               <span class="reply-hint">${svg(ICONS.shield, '#f59e0b', 12)} Approve or reject first to send a reply</span>`
+            : `<span class="locked">${svg(ICONS.shield, '#555', 12)} Decision locked</span>
+               <button class="btn btn-reply" onclick="toggleReplyBox(${c.id})">${svg(ICONS.reply, '#fff', 13)}${hasReply ? 'Edit reply' : 'Reply'}</button>`
           }
-          ${!locked ? `<button class="btn btn-reply" onclick="toggleReplyBox(${c.id})">${svg(ICONS.reply, '#fff', 13)}${hasReply ? 'Edit reply' : 'Reply'}</button>` : ''}
         </div>
-        ${!locked ? `<div class="reply-form" id="replyForm-${c.id}" style="display:none">
+        ${!isPending ? `<div class="reply-form" id="replyForm-${c.id}" style="display:none">
           <textarea id="replyText-${c.id}" class="reply-textarea" placeholder="Write your reply to the user…" rows="3">${hasReply ? escapeHtml(c.admin_reply) : ''}</textarea>
           <div class="reply-form-actions">
             <button class="btn btn-sm" onclick="document.getElementById('replyForm-${c.id}').style.display='none'">Cancel</button>
@@ -2098,16 +2097,7 @@ app.get('/admin/dashboard', (req, res) => {
       });
       const d = await r.json();
       if(!d.ok){ showToast(d.error || 'Failed', false); return; }
-      const choice = await showStatusPicker();
-      if(choice === 'approved' || choice === 'rejected'){
-        await fetch('/admin/contact/'+id+'/status', {
-          method:'PATCH', headers:{'Content-Type':'application/json'}, credentials:'include',
-          body: JSON.stringify({ status: choice })
-        });
-        showToast(choice === 'approved' ? 'Approved' : 'Rejected', true);
-      } else {
-        showToast('Reply sent', true);
-      }
+      showToast('Reply sent', true);
       setTimeout(()=>location.reload(), 500);
     } catch(e){ showToast('Network error', false); }
   }
@@ -2324,13 +2314,10 @@ app.patch('/admin/contact/:id/status', requireAdmin, (req, res) => {
   if (!id) return res.status(400).json({ error: 'Invalid id' });
   if (!['approved', 'rejected'].includes(status)) return res.status(400).json({ error: 'Invalid status' });
   try {
-    const current = db.prepare('SELECT status, admin_reply FROM contact_messages WHERE id = ?').get(id);
+    const current = db.prepare('SELECT status FROM contact_messages WHERE id = ?').get(id);
     if (!current) return res.status(404).json({ error: 'Message not found' });
     if (current.status !== 'pending') {
       return res.status(409).json({ error: `Already ${current.status} — decision is final` });
-    }
-    if (!current.admin_reply || !current.admin_reply.trim()) {
-      return res.status(400).json({ error: 'You must reply to this message before making a decision' });
     }
     db.prepare('UPDATE contact_messages SET status = ? WHERE id = ?').run(status, id);
     res.json({ ok: true, status });
@@ -2380,9 +2367,14 @@ app.post('/admin/contact/:id/reply', requireAdmin, (req, res) => {
   const { reply } = req.body;
   if (!id) return res.status(400).json({ error: 'Invalid id' });
   if (!reply || typeof reply !== 'string' || reply.trim().length < 2) return res.status(400).json({ error: 'Reply too short' });
-  const msg = db.prepare('SELECT id FROM contact_messages WHERE id = ?').get(id);
+  const msg = db.prepare('SELECT id, status FROM contact_messages WHERE id = ?').get(id);
   if (!msg) return res.status(404).json({ error: 'Message not found' });
-  db.prepare('UPDATE contact_messages SET admin_reply = ?, replied_at = CURRENT_TIMESTAMP WHERE id = ?')
+  // Replies are only permitted after the report has been reviewed
+  // (i.e. marked as approved or rejected). Pending reports cannot receive a reply.
+  if (msg.status !== 'approved' && msg.status !== 'rejected') {
+    return res.status(400).json({ error: 'Report must be approved or rejected before replying' });
+  }
+  db.prepare('UPDATE contact_messages SET admin_reply = ?, replied_at = CURRENT_TIMESTAMP, seen_at = NULL WHERE id = ?')
     .run(reply.trim().slice(0, 3000), id);
   console.log(`💬 Admin replied to contact message #${id}`);
   res.json({ ok: true });
