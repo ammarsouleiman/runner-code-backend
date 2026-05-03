@@ -90,6 +90,7 @@ try { db.exec("ALTER TABLE users ADD COLUMN suspended INTEGER NOT NULL DEFAULT 0
 try { db.exec("ALTER TABLE contact_messages ADD COLUMN admin_reply TEXT"); } catch {}
 try { db.exec("ALTER TABLE contact_messages ADD COLUMN replied_at DATETIME"); } catch {}
 try { db.exec("ALTER TABLE contact_messages ADD COLUMN seen_at DATETIME"); } catch {}
+try { db.exec("ALTER TABLE users ADD COLUMN last_active DATETIME"); } catch {}
 
 // ── Middleware ────────────────────────────────────────────────────────────────
 const ALLOWED_ORIGINS = [
@@ -182,6 +183,7 @@ function verifyToken(req, res, next) {
     const exists = db.prepare('SELECT id, suspended FROM users WHERE id = ?').get(decoded.id);
     if (!exists) return res.status(401).json({ error: 'Account no longer exists' });
     if (exists.suspended) return res.status(403).json({ error: 'Account suspended. Contact support.' });
+    try { db.prepare('UPDATE users SET last_active = datetime("now") WHERE id = ?').run(decoded.id); } catch {}
     req.user = decoded;
     next();
   } catch {
@@ -641,7 +643,7 @@ app.get('/admin/users', (req, res) => {
 // ── GET /admin/dashboard ──────────────────────────────────────────────────────
 app.get('/admin/dashboard', (req, res) => {
   if (!isAdminAuthed(req)) return res.redirect('/admin');
-  const users = db.prepare('SELECT id, name, email, country, password_hash, google_id, suspended, created_at FROM users ORDER BY created_at DESC').all();
+  const users = db.prepare('SELECT id, name, email, country, password_hash, google_id, suspended, created_at, last_active FROM users ORDER BY created_at DESC').all();
   const contacts = db.prepare('SELECT id, type, subject, message, user_name, user_email, user_id, status, admin_reply, replied_at, created_at FROM contact_messages ORDER BY created_at DESC').all();
   // Conversations summary for admin
   const allConvs = db.prepare(`
@@ -707,6 +709,28 @@ app.get('/admin/dashboard', (req, res) => {
       const u = users.find(u => u.id === Number(uid));
       return { name: u?.name || 'Unknown', email: u?.email || '—', count, msgs: allConvs.filter(c => c.user_id === Number(uid)).reduce((s, c) => s + (c.message_count || 0), 0) };
     });
+
+  // ── Live activity (last_active based) ─────────────────────────────────────
+  const nowMs = Date.now();
+  const activityList = users
+    .filter(u => u.last_active)
+    .map(u => {
+      const lastMs = new Date(u.last_active + 'Z').getTime();
+      const diffMin = Math.max(0, Math.floor((nowMs - lastMs) / 60000));
+      let status, label;
+      if (diffMin < 2)        { status = 'online'; label = 'Online'; }
+      else if (diffMin < 60)  { status = 'recent'; label = diffMin + 'm ago'; }
+      else if (diffMin < 1440){ status = 'recent'; label = Math.floor(diffMin / 60) + 'h ago'; }
+      else if (diffMin < 10080){ status = 'away';  label = Math.floor(diffMin / 1440) + 'd ago'; }
+      else                    { status = 'away';   label = new Date(u.last_active + 'Z').toLocaleDateString('en-US', { month: 'short', day: 'numeric' }); }
+      const lastSeenFull = new Date(u.last_active + 'Z').toLocaleString('en-US', { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' });
+      return { id: u.id, name: u.name, email: u.email, country: u.country, suspended: u.suspended, lastMs, diffMin, status, label, lastSeenFull };
+    })
+    .sort((a, b) => b.lastMs - a.lastMs);
+  const onlineNowCount = activityList.filter(a => a.status === 'online').length;
+  const activeTodayCount = activityList.filter(a => a.diffMin < 1440).length;
+  const activityTop = activityList.slice(0, 8);
+  const neverActiveCount = users.length - activityList.length;
 
   // DB file size
   let dbSizeStr = '—';
@@ -1152,6 +1176,29 @@ app.get('/admin/dashboard', (req, res) => {
   .top-email{font-size:11px;color:var(--muted);margin-top:1px}
   .top-stats{display:flex;gap:8px;flex-shrink:0}
   .top-stat{display:inline-flex;align-items:center;gap:4px;font-size:10px;font-weight:700;color:var(--muted);padding:2px 6px;border-radius:6px;background:rgba(255,255,255,.03)}
+  /* Activity panel */
+  .act-summary{display:grid;grid-template-columns:repeat(3,1fr);gap:10px;margin-bottom:14px}
+  .act-stat{background:rgba(255,255,255,.02);border:1px solid var(--border-soft);border-radius:10px;padding:12px 14px;display:flex;align-items:center;gap:10px}
+  .act-stat-dot{width:10px;height:10px;border-radius:50%;flex-shrink:0}
+  .act-stat-dot.online{background:#22c55e;box-shadow:0 0 8px #22c55e80}
+  .act-stat-dot.today{background:#f59e0b;box-shadow:0 0 6px #f59e0b50}
+  .act-stat-dot.never{background:#444}
+  .act-stat-val{font-size:18px;font-weight:800;color:var(--text);line-height:1}
+  .act-stat-lbl{font-size:10px;color:var(--muted);font-weight:700;text-transform:uppercase;letter-spacing:.5px;margin-top:2px}
+  .actu-row{display:flex;align-items:center;gap:10px;padding:10px 0}
+  .actu-row + .actu-row{border-top:1px solid var(--border-soft)}
+  .actu-meta{flex:1;min-width:0}
+  .actu-name{font-size:13px;font-weight:700;color:var(--text);display:flex;align-items:center;gap:6px}
+  .actu-email{font-size:11px;color:var(--muted);margin-top:1px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+  .actu-status{display:inline-flex;align-items:center;gap:5px;font-size:11px;font-weight:700;padding:4px 9px;border-radius:8px;flex-shrink:0;border:1px solid}
+  .actu-status .st-dot{width:7px;height:7px;border-radius:50%;flex-shrink:0}
+  .actu-status.online{color:#22c55e;background:#22c55e10;border-color:#22c55e30}
+  .actu-status.online .st-dot{background:#22c55e;box-shadow:0 0 6px #22c55e80}
+  .actu-status.recent{color:#f59e0b;background:#f59e0b10;border-color:#f59e0b30}
+  .actu-status.recent .st-dot{background:#f59e0b}
+  .actu-status.away{color:var(--muted);background:rgba(255,255,255,.02);border-color:var(--border-soft)}
+  .actu-status.away .st-dot{background:#666}
+  .actu-time{font-size:10px;color:var(--muted2);font-weight:600;flex-shrink:0;white-space:nowrap}
   /* System info */
   .sys-grid{display:grid;grid-template-columns:1fr 1fr;gap:0}
   .sys-item{padding:12px 0;border-bottom:1px solid var(--border-soft);display:flex;justify-content:space-between;align-items:center}
@@ -1641,6 +1688,52 @@ app.get('/admin/dashboard', (req, res) => {
               </div>
             </div>
           </div>
+        </div>
+      </div>
+
+      <!-- User Activity (live status) -->
+      <div class="panel">
+        <div class="panel-head">
+          <div>
+            <div class="panel-title">User activity</div>
+            <div class="panel-sub">Live presence &amp; last seen</div>
+          </div>
+          <span class="panel-ico">${svg(ICONS.users, 'var(--muted)', 16)}</span>
+        </div>
+        <div class="panel-body">
+          <div class="act-summary">
+            <div class="act-stat">
+              <span class="act-stat-dot online"></span>
+              <div>
+                <div class="act-stat-val" style="color:#22c55e">${onlineNowCount}</div>
+                <div class="act-stat-lbl">Online now</div>
+              </div>
+            </div>
+            <div class="act-stat">
+              <span class="act-stat-dot today"></span>
+              <div>
+                <div class="act-stat-val" style="color:#f59e0b">${activeTodayCount}</div>
+                <div class="act-stat-lbl">Active today</div>
+              </div>
+            </div>
+            <div class="act-stat">
+              <span class="act-stat-dot never"></span>
+              <div>
+                <div class="act-stat-val">${neverActiveCount}</div>
+                <div class="act-stat-lbl">Never seen</div>
+              </div>
+            </div>
+          </div>
+          ${activityTop.length ? activityTop.map(a => `
+            <div class="actu-row">
+              <div class="avatar avatar-sm">${escapeHtml(String(a.name || '?').trim().split(/\s+/).map(p => p[0]).slice(0, 2).join('').toUpperCase() || '?')}</div>
+              <div class="actu-meta">
+                <div class="actu-name">${escapeHtml(a.name)}${a.suspended ? ` <span class="suspend-badge">${svg(ICONS.lock, '#ef4444', 10)} Suspended</span>` : ''}</div>
+                <div class="actu-email">${escapeHtml(a.email)}</div>
+              </div>
+              <span class="actu-time" title="Last active">${escapeHtml(a.lastSeenFull)}</span>
+              <span class="actu-status ${a.status}"><span class="st-dot"></span>${escapeHtml(a.label)}</span>
+            </div>`).join('') : `<div class="empty-inline">${svg(ICONS.users, '#333', 32)}<p>No activity yet</p></div>`}
         </div>
       </div>
 
@@ -2303,6 +2396,9 @@ app.post('/api/notifications/mark-seen', verifyToken, (req, res) => {
     res.status(500).json({ error: 'Failed to update' });
   }
 });
+
+// ── POST /api/heartbeat — lightweight activity ping ──────────────────────────
+app.post('/api/heartbeat', verifyToken, (_req, res) => res.json({ ok: true }));
 
 // ── DELETE /admin/users/:id ───────────────────────────────────────────────────
 app.delete('/admin/users/:id', requireAdmin, (req, res) => {
