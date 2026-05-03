@@ -90,7 +90,6 @@ try { db.exec("ALTER TABLE users ADD COLUMN suspended INTEGER NOT NULL DEFAULT 0
 try { db.exec("ALTER TABLE contact_messages ADD COLUMN admin_reply TEXT"); } catch {}
 try { db.exec("ALTER TABLE contact_messages ADD COLUMN replied_at DATETIME"); } catch {}
 try { db.exec("ALTER TABLE contact_messages ADD COLUMN seen_at DATETIME"); } catch {}
-try { db.exec("ALTER TABLE users ADD COLUMN last_active DATETIME"); } catch {}
 
 // ── Middleware ────────────────────────────────────────────────────────────────
 const ALLOWED_ORIGINS = [
@@ -183,8 +182,6 @@ function verifyToken(req, res, next) {
     const exists = db.prepare('SELECT id, suspended FROM users WHERE id = ?').get(decoded.id);
     if (!exists) return res.status(401).json({ error: 'Account no longer exists' });
     if (exists.suspended) return res.status(403).json({ error: 'Account suspended. Contact support.' });
-    // Update last_active timestamp (fire-and-forget)
-    db.prepare('UPDATE users SET last_active = datetime("now") WHERE id = ?').run(decoded.id);
     req.user = decoded;
     next();
   } catch {
@@ -644,7 +641,7 @@ app.get('/admin/users', (req, res) => {
 // ── GET /admin/dashboard ──────────────────────────────────────────────────────
 app.get('/admin/dashboard', (req, res) => {
   if (!isAdminAuthed(req)) return res.redirect('/admin');
-  const users = db.prepare('SELECT id, name, email, country, password_hash, google_id, suspended, created_at, last_active FROM users ORDER BY created_at DESC').all();
+  const users = db.prepare('SELECT id, name, email, country, password_hash, google_id, suspended, created_at FROM users ORDER BY created_at DESC').all();
   const contacts = db.prepare('SELECT id, type, subject, message, user_name, user_email, user_id, status, admin_reply, replied_at, created_at FROM contact_messages ORDER BY created_at DESC').all();
   // Conversations summary for admin
   const allConvs = db.prepare(`
@@ -885,8 +882,6 @@ app.get('/admin/dashboard', (req, res) => {
   }).join('');
 
   // User list (all users)
-  const now = Date.now();
-  const onlineCount = users.filter(u => u.last_active && (now - new Date(u.last_active + 'Z').getTime()) < 120000).length;
   const userRows = users.map(u => {
     const hasRealPassword = u.password_hash && u.password_hash !== 'GOOGLE_AUTH' && u.password_hash.startsWith('$2');
     let authBadge;
@@ -896,21 +891,6 @@ app.get('/admin/dashboard', (req, res) => {
     else                               authBadge = `<span class="auth-pill auth-none">${svg(ICONS.alert, '#f59e0b', 11)}None</span>`;
     const initials = String(u.name || '?').trim().split(/\s+/).map(p => p[0]).slice(0, 2).join('').toUpperCase() || '?';
     const userConvCount = allConvs.filter(c => c.user_id === u.id).length;
-
-    // Last seen / activity status
-    let statusClass = 'status-never';
-    let statusText = 'Never';
-    if (u.last_active) {
-      const lastMs = new Date(u.last_active + 'Z').getTime();
-      const diffMin = Math.floor((now - lastMs) / 60000);
-      if (diffMin < 2) { statusClass = 'status-online'; statusText = 'Online'; }
-      else if (diffMin < 60) { statusClass = 'status-recent'; statusText = `${diffMin}m ago`; }
-      else if (diffMin < 1440) { const h = Math.floor(diffMin / 60); statusClass = 'status-recent'; statusText = `${h}h ago`; }
-      else if (diffMin < 10080) { const d = Math.floor(diffMin / 1440); statusClass = 'status-offline'; statusText = `${d}d ago`; }
-      else { statusClass = 'status-offline'; statusText = new Date(u.last_active + 'Z').toLocaleDateString('en-US', { month: 'short', day: 'numeric' }); }
-    }
-    const lastSeenHtml = `<span class="urow-status ${statusClass}"><span class="status-dot"></span>${statusText}</span>`;
-
     return `
     <div class="user-row ${u.suspended ? 'user-suspended' : ''}" data-search="${escapeHtml((u.name + ' ' + u.email).toLowerCase())}">
       <div class="avatar avatar-sm">${escapeHtml(initials)}</div>
@@ -919,7 +899,6 @@ app.get('/admin/dashboard', (req, res) => {
         <div class="urow-email">${escapeHtml(u.email)}</div>
       </div>
       <div class="urow-info">
-        ${lastSeenHtml}
         <span class="info-item urow-country">${svg(ICONS.globe, '#666', 12)}${escapeHtml(u.country || '—')}</span>
         <span class="info-item">${svg(ICONS.msgCircle, '#666', 12)}${userConvCount} chats</span>
         <span class="info-item urow-date">${svg(ICONS.calendar, '#666', 12)}${escapeHtml(u.created_at || '—')}</span>
@@ -1125,17 +1104,6 @@ app.get('/admin/dashboard', (req, res) => {
   .user-suspended{opacity:.65;border-color:#ef444440}
   .user-suspended .avatar{background:linear-gradient(135deg,#555,#333)}
   .suspend-badge{display:inline-flex;align-items:center;gap:3px;font-size:9px;font-weight:700;color:#ef4444;text-transform:uppercase;letter-spacing:.5px;margin-left:4px;padding:1px 6px;background:#ef444412;border:1px solid #ef444430;border-radius:6px}
-  /* Last seen / activity status */
-  .urow-status{display:inline-flex;align-items:center;gap:5px;font-size:10px;font-weight:600;white-space:nowrap}
-  .status-dot{width:7px;height:7px;border-radius:50%;flex-shrink:0}
-  .status-online .status-dot{background:#22c55e;box-shadow:0 0 6px #22c55e80}
-  .status-online{color:#22c55e}
-  .status-recent .status-dot{background:#f59e0b;box-shadow:0 0 6px #f59e0b60}
-  .status-recent{color:#f59e0b}
-  .status-offline .status-dot{background:#555}
-  .status-offline{color:var(--muted2)}
-  .status-never .status-dot{background:#333}
-  .status-never{color:#444}
   /* Admin reply */
   .admin-reply-box{background:linear-gradient(135deg,#8b5cf612,#8b5cf606);border:1px solid #8b5cf630;border-radius:10px;padding:12px 14px;margin-bottom:10px}
   .admin-reply-head{display:flex;align-items:center;gap:6px;font-size:10px;font-weight:700;color:#8b5cf6;text-transform:uppercase;letter-spacing:1px;margin-bottom:6px}
@@ -1725,7 +1693,7 @@ app.get('/admin/dashboard', (req, res) => {
       <div class="page-header">
         <div>
           <div class="page-title">Users</div>
-          <div class="page-sub">${users.length} registered account${users.length === 1 ? '' : 's'}${onlineCount ? ` · <span style="color:#22c55e;font-weight:700">${onlineCount} online</span>` : ''}${suspendedCount ? ` · <span style="color:#ef4444;font-weight:700">${suspendedCount} suspended</span>` : ''}</div>
+          <div class="page-sub">${users.length} registered account${users.length === 1 ? '' : 's'}${suspendedCount ? ` · <span style="color:#ef4444;font-weight:700">${suspendedCount} suspended</span>` : ''}</div>
         </div>
         <div class="search-wrap">
           <span class="search-icon">${svg(ICONS.search, '#555', 15)}</span>
@@ -2334,11 +2302,6 @@ app.post('/api/notifications/mark-seen', verifyToken, (req, res) => {
     console.error('POST /api/notifications/mark-seen error:', err.message);
     res.status(500).json({ error: 'Failed to update' });
   }
-});
-
-// ── POST /api/heartbeat — lightweight activity ping ───────────────────────────
-app.post('/api/heartbeat', verifyToken, (_req, res) => {
-  res.json({ ok: true });
 });
 
 // ── DELETE /admin/users/:id ───────────────────────────────────────────────────
