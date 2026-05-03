@@ -90,7 +90,6 @@ try { db.exec("ALTER TABLE users ADD COLUMN suspended INTEGER NOT NULL DEFAULT 0
 try { db.exec("ALTER TABLE contact_messages ADD COLUMN admin_reply TEXT"); } catch {}
 try { db.exec("ALTER TABLE contact_messages ADD COLUMN replied_at DATETIME"); } catch {}
 try { db.exec("ALTER TABLE contact_messages ADD COLUMN seen_at DATETIME"); } catch {}
-try { db.exec("ALTER TABLE users ADD COLUMN last_active DATETIME"); } catch {}
 
 // ── Middleware ────────────────────────────────────────────────────────────────
 const ALLOWED_ORIGINS = [
@@ -183,7 +182,6 @@ function verifyToken(req, res, next) {
     const exists = db.prepare('SELECT id, suspended FROM users WHERE id = ?').get(decoded.id);
     if (!exists) return res.status(401).json({ error: 'Account no longer exists' });
     if (exists.suspended) return res.status(403).json({ error: 'Account suspended. Contact support.' });
-    try { db.prepare("UPDATE users SET last_active = datetime('now') WHERE id = ?").run(decoded.id); } catch {}
     req.user = decoded;
     next();
   } catch {
@@ -228,7 +226,6 @@ app.post('/api/auth/register', authLimiter, (req, res) => {
 
   console.log(`✅ New user registered (id=${result.lastInsertRowid})`);
 
-  try { db.prepare("UPDATE users SET last_active = datetime('now') WHERE id = ?").run(result.lastInsertRowid); } catch {}
   setAuthCookie(res, token);
   res.status(201).json({
     user: {
@@ -268,7 +265,6 @@ app.post('/api/auth/login', authLimiter, (req, res) => {
 
   console.log(`✅ User logged in (id=${user.id})`);
 
-  try { db.prepare("UPDATE users SET last_active = datetime('now') WHERE id = ?").run(user.id); } catch {}
   setAuthCookie(res, token);
   res.json({
     user: { id: user.id, name: user.name, email: user.email, country: user.country },
@@ -341,7 +337,6 @@ app.post('/api/auth/complete-profile', authLimiter, (req, res) => {
     { expiresIn: '30d' }
   );
 
-  try { db.prepare("UPDATE users SET last_active = datetime('now') WHERE id = ?").run(user.id); } catch {}
   setAuthCookie(res, token);
   res.json({ user: { id: user.id, name: user.name, email: user.email, country: user.country } });
 });
@@ -420,7 +415,6 @@ app.post('/api/auth/google', authLimiter, async (req, res) => {
       { expiresIn: '30d' }
     );
 
-    try { db.prepare("UPDATE users SET last_active = datetime('now') WHERE id = ?").run(user.id); } catch {}
     setAuthCookie(res, jwtToken);
     res.json({
       user: { id: user.id, name: user.name, email: user.email, country: user.country },
@@ -647,7 +641,7 @@ app.get('/admin/users', (req, res) => {
 // ── GET /admin/dashboard ──────────────────────────────────────────────────────
 app.get('/admin/dashboard', (req, res) => {
   if (!isAdminAuthed(req)) return res.redirect('/admin');
-  const users = db.prepare('SELECT id, name, email, country, password_hash, google_id, suspended, created_at, last_active FROM users ORDER BY created_at DESC').all();
+  const users = db.prepare('SELECT id, name, email, country, password_hash, google_id, suspended, created_at FROM users ORDER BY created_at DESC').all();
   const contacts = db.prepare('SELECT id, type, subject, message, user_name, user_email, user_id, status, admin_reply, replied_at, created_at FROM contact_messages ORDER BY created_at DESC').all();
   // Conversations summary for admin
   const allConvs = db.prepare(`
@@ -713,28 +707,6 @@ app.get('/admin/dashboard', (req, res) => {
       const u = users.find(u => u.id === Number(uid));
       return { name: u?.name || 'Unknown', email: u?.email || '—', count, msgs: allConvs.filter(c => c.user_id === Number(uid)).reduce((s, c) => s + (c.message_count || 0), 0) };
     });
-
-  // ── Live activity (last_active based) ─────────────────────────────────────
-  const nowMs = Date.now();
-  const activityList = users
-    .filter(u => u.last_active)
-    .map(u => {
-      const lastMs = new Date(u.last_active + 'Z').getTime();
-      const diffMin = Math.max(0, Math.floor((nowMs - lastMs) / 60000));
-      let status, label;
-      if (diffMin < 3)        { status = 'online'; label = 'Online'; }
-      else if (diffMin < 60)  { status = 'recent'; label = diffMin + 'm ago'; }
-      else if (diffMin < 1440){ status = 'recent'; label = Math.floor(diffMin / 60) + 'h ago'; }
-      else if (diffMin < 10080){ status = 'away';  label = Math.floor(diffMin / 1440) + 'd ago'; }
-      else                    { status = 'away';   label = new Date(u.last_active + 'Z').toLocaleDateString('en-US', { month: 'short', day: 'numeric' }); }
-      const lastSeenFull = new Date(u.last_active + 'Z').toLocaleString('en-US', { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' });
-      return { id: u.id, name: u.name, email: u.email, country: u.country, suspended: u.suspended, lastMs, diffMin, status, label, lastSeenFull };
-    })
-    .sort((a, b) => b.lastMs - a.lastMs);
-  const onlineNowCount = activityList.filter(a => a.status === 'online').length;
-  const activeTodayCount = activityList.filter(a => a.diffMin < 1440).length;
-  const activityTop = activityList.slice(0, 8);
-  const neverActiveCount = users.length - activityList.length;
 
   // DB file size
   let dbSizeStr = '—';
@@ -1180,32 +1152,6 @@ app.get('/admin/dashboard', (req, res) => {
   .top-email{font-size:11px;color:var(--muted);margin-top:1px}
   .top-stats{display:flex;gap:8px;flex-shrink:0}
   .top-stat{display:inline-flex;align-items:center;gap:4px;font-size:10px;font-weight:700;color:var(--muted);padding:2px 6px;border-radius:6px;background:rgba(255,255,255,.03)}
-  /* Activity panel */
-  .live-pill{display:inline-flex;align-items:center;gap:5px;font-size:9px;font-weight:800;color:#22c55e;background:#22c55e15;border:1px solid #22c55e35;padding:2px 7px;border-radius:6px;letter-spacing:1px;margin-left:8px;vertical-align:middle}
-  .live-dot{width:6px;height:6px;border-radius:50%;background:#22c55e;animation:pulse 1.5s ease-in-out infinite}
-  @keyframes pulse{0%,100%{opacity:1;box-shadow:0 0 0 0 #22c55e80}50%{opacity:.5;box-shadow:0 0 0 4px #22c55e00}}
-  .act-summary{display:grid;grid-template-columns:repeat(3,1fr);gap:10px;margin-bottom:14px}
-  .act-stat{background:rgba(255,255,255,.02);border:1px solid var(--border-soft);border-radius:10px;padding:12px 14px;display:flex;align-items:center;gap:10px}
-  .act-stat-dot{width:10px;height:10px;border-radius:50%;flex-shrink:0}
-  .act-stat-dot.online{background:#22c55e;box-shadow:0 0 8px #22c55e80}
-  .act-stat-dot.today{background:#f59e0b;box-shadow:0 0 6px #f59e0b50}
-  .act-stat-dot.never{background:#444}
-  .act-stat-val{font-size:18px;font-weight:800;color:var(--text);line-height:1}
-  .act-stat-lbl{font-size:10px;color:var(--muted);font-weight:700;text-transform:uppercase;letter-spacing:.5px;margin-top:2px}
-  .actu-row{display:flex;align-items:center;gap:10px;padding:10px 0}
-  .actu-row + .actu-row{border-top:1px solid var(--border-soft)}
-  .actu-meta{flex:1;min-width:0}
-  .actu-name{font-size:13px;font-weight:700;color:var(--text);display:flex;align-items:center;gap:6px}
-  .actu-email{font-size:11px;color:var(--muted);margin-top:1px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
-  .actu-status{display:inline-flex;align-items:center;gap:5px;font-size:11px;font-weight:700;padding:4px 9px;border-radius:8px;flex-shrink:0;border:1px solid}
-  .actu-status .st-dot{width:7px;height:7px;border-radius:50%;flex-shrink:0}
-  .actu-status.online{color:#22c55e;background:#22c55e10;border-color:#22c55e30}
-  .actu-status.online .st-dot{background:#22c55e;box-shadow:0 0 6px #22c55e80}
-  .actu-status.recent{color:#f59e0b;background:#f59e0b10;border-color:#f59e0b30}
-  .actu-status.recent .st-dot{background:#f59e0b}
-  .actu-status.away{color:var(--muted);background:rgba(255,255,255,.02);border-color:var(--border-soft)}
-  .actu-status.away .st-dot{background:#666}
-  .actu-time{font-size:10px;color:var(--muted2);font-weight:600;flex-shrink:0;white-space:nowrap}
   /* System info */
   .sys-grid{display:grid;grid-template-columns:1fr 1fr;gap:0}
   .sys-item{padding:12px 0;border-bottom:1px solid var(--border-soft);display:flex;justify-content:space-between;align-items:center}
@@ -1694,54 +1640,6 @@ app.get('/admin/dashboard', (req, res) => {
                 <div class="sys-value" style="color:#22c55e">${totalContacts ? Math.round((repliedCount / totalContacts) * 100) : 0}%</div>
               </div>
             </div>
-          </div>
-        </div>
-      </div>
-
-      <!-- User Activity (live status) -->
-      <div class="panel" id="activity-panel">
-        <div class="panel-head">
-          <div>
-            <div class="panel-title">User activity <span class="live-pill"><span class="live-dot"></span>LIVE</span></div>
-            <div class="panel-sub">Live presence &amp; last seen · <span id="activity-updated">just now</span></div>
-          </div>
-          <span class="panel-ico">${svg(ICONS.users, 'var(--muted)', 16)}</span>
-        </div>
-        <div class="panel-body">
-          <div class="act-summary">
-            <div class="act-stat">
-              <span class="act-stat-dot online"></span>
-              <div>
-                <div class="act-stat-val" id="act-online" style="color:#22c55e">${onlineNowCount}</div>
-                <div class="act-stat-lbl">Online now</div>
-              </div>
-            </div>
-            <div class="act-stat">
-              <span class="act-stat-dot today"></span>
-              <div>
-                <div class="act-stat-val" id="act-today" style="color:#f59e0b">${activeTodayCount}</div>
-                <div class="act-stat-lbl">Active today</div>
-              </div>
-            </div>
-            <div class="act-stat">
-              <span class="act-stat-dot never"></span>
-              <div>
-                <div class="act-stat-val" id="act-never">${neverActiveCount}</div>
-                <div class="act-stat-lbl">Never seen</div>
-              </div>
-            </div>
-          </div>
-          <div id="activity-list">
-          ${activityTop.length ? activityTop.map(a => `
-            <div class="actu-row">
-              <div class="avatar avatar-sm">${escapeHtml(String(a.name || '?').trim().split(/\s+/).map(p => p[0]).slice(0, 2).join('').toUpperCase() || '?')}</div>
-              <div class="actu-meta">
-                <div class="actu-name">${escapeHtml(a.name)}${a.suspended ? ` <span class="suspend-badge">${svg(ICONS.lock, '#ef4444', 10)} Suspended</span>` : ''}</div>
-                <div class="actu-email">${escapeHtml(a.email)}</div>
-              </div>
-              <span class="actu-time" title="Last active">${escapeHtml(a.lastSeenFull)}</span>
-              <span class="actu-status ${a.status}"><span class="st-dot"></span>${escapeHtml(a.label)}</span>
-            </div>`).join('') : `<div class="empty-inline">${svg(ICONS.users, '#333', 32)}<p>No activity yet</p></div>`}
           </div>
         </div>
       </div>
@@ -2329,55 +2227,6 @@ app.get('/admin/dashboard', (req, res) => {
     if(active) sessionStorage.setItem('admin_section', active.dataset.section);
     setTimeout(()=>location.reload(), 400);
   }
-
-  // ── Live activity polling (every 10s) ──
-  function escHtml(s){return String(s||'').replace(/[&<>"']/g, c=>({ '&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;' }[c]));}
-  function initialsOf(name){return String(name||'?').trim().split(/\\s+/).map(p=>p[0]).slice(0,2).join('').toUpperCase()||'?';}
-  let lastActivityFetch = Date.now();
-  async function refreshActivity(){
-    try{
-      const r = await fetch('/admin/activity', { credentials:'include' });
-      if(!r.ok) return;
-      const d = await r.json();
-      const onlineEl = document.getElementById('act-online');
-      const todayEl = document.getElementById('act-today');
-      const neverEl = document.getElementById('act-never');
-      const listEl = document.getElementById('activity-list');
-      const updEl = document.getElementById('activity-updated');
-      if(onlineEl) onlineEl.textContent = d.onlineNow;
-      if(todayEl) todayEl.textContent = d.activeToday;
-      if(neverEl) neverEl.textContent = d.neverActive;
-      if(listEl){
-        if(!d.top || d.top.length === 0){
-          listEl.innerHTML = '<div class="empty-inline"><p>No activity yet</p></div>';
-        } else {
-          listEl.innerHTML = d.top.map(a => {
-            const susp = a.suspended ? ' <span class="suspend-badge">Suspended</span>' : '';
-            return '<div class="actu-row">'
-              + '<div class="avatar avatar-sm">' + escHtml(initialsOf(a.name)) + '</div>'
-              + '<div class="actu-meta"><div class="actu-name">' + escHtml(a.name) + susp + '</div>'
-              + '<div class="actu-email">' + escHtml(a.email) + '</div></div>'
-              + '<span class="actu-time">' + escHtml(a.lastSeenFull) + '</span>'
-              + '<span class="actu-status ' + a.status + '"><span class="st-dot"></span>' + escHtml(a.label) + '</span>'
-              + '</div>';
-          }).join('');
-        }
-      }
-      lastActivityFetch = Date.now();
-      if(updEl) updEl.textContent = 'updated just now';
-    } catch {}
-  }
-  // Tick the "updated Xs ago" label every second
-  setInterval(()=>{
-    const updEl = document.getElementById('activity-updated');
-    if(!updEl) return;
-    const sec = Math.floor((Date.now() - lastActivityFetch) / 1000);
-    if(sec < 5) updEl.textContent = 'updated just now';
-    else if(sec < 60) updEl.textContent = 'updated ' + sec + 's ago';
-    else updEl.textContent = 'updated ' + Math.floor(sec/60) + 'm ago';
-  }, 1000);
-  setInterval(refreshActivity, 10000);
-  document.addEventListener('visibilitychange', ()=>{ if(document.visibilityState === 'visible') refreshActivity(); });
 </script>
 </body></html>`);
 });
@@ -2453,37 +2302,6 @@ app.post('/api/notifications/mark-seen', verifyToken, (req, res) => {
     console.error('POST /api/notifications/mark-seen error:', err.message);
     res.status(500).json({ error: 'Failed to update' });
   }
-});
-
-// ── POST /api/heartbeat — lightweight activity ping ──────────────────────────
-app.post('/api/heartbeat', verifyToken, (_req, res) => res.json({ ok: true }));
-
-// ── GET /admin/activity — JSON for live activity panel auto-refresh ──────────
-app.get('/admin/activity', (req, res) => {
-  if (!isAdminAuthed(req)) return res.status(401).json({ error: 'Unauthorized' });
-  const users = db.prepare("SELECT id, name, email, suspended, last_active FROM users ORDER BY (last_active IS NULL), last_active DESC").all();
-  const nowMs = Date.now();
-  const list = users
-    .filter(u => u.last_active)
-    .map(u => {
-      const lastMs = new Date(u.last_active + 'Z').getTime();
-      const diffMin = Math.max(0, Math.floor((nowMs - lastMs) / 60000));
-      let status, label;
-      if (diffMin < 3)        { status = 'online'; label = 'Online'; }
-      else if (diffMin < 60)  { status = 'recent'; label = diffMin + 'm ago'; }
-      else if (diffMin < 1440){ status = 'recent'; label = Math.floor(diffMin / 60) + 'h ago'; }
-      else if (diffMin < 10080){ status = 'away';  label = Math.floor(diffMin / 1440) + 'd ago'; }
-      else                    { status = 'away';   label = new Date(u.last_active + 'Z').toLocaleDateString('en-US', { month: 'short', day: 'numeric' }); }
-      const lastSeenFull = new Date(u.last_active + 'Z').toLocaleString('en-US', { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' });
-      return { id: u.id, name: u.name, email: u.email, suspended: !!u.suspended, diffMin, status, label, lastSeenFull };
-    });
-  res.json({
-    onlineNow: list.filter(a => a.status === 'online').length,
-    activeToday: list.filter(a => a.diffMin < 1440).length,
-    neverActive: users.length - list.length,
-    top: list.slice(0, 8),
-    serverTime: new Date().toISOString(),
-  });
 });
 
 // ── DELETE /admin/users/:id ───────────────────────────────────────────────────
