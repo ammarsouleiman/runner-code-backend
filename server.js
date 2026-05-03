@@ -183,7 +183,7 @@ function verifyToken(req, res, next) {
     const exists = db.prepare('SELECT id, suspended FROM users WHERE id = ?').get(decoded.id);
     if (!exists) return res.status(401).json({ error: 'Account no longer exists' });
     if (exists.suspended) return res.status(403).json({ error: 'Account suspended. Contact support.' });
-    try { db.prepare('UPDATE users SET last_active = datetime("now") WHERE id = ?').run(decoded.id); } catch {}
+    try { db.prepare("UPDATE users SET last_active = datetime('now') WHERE id = ?").run(decoded.id); } catch {}
     req.user = decoded;
     next();
   } catch {
@@ -228,7 +228,7 @@ app.post('/api/auth/register', authLimiter, (req, res) => {
 
   console.log(`✅ New user registered (id=${result.lastInsertRowid})`);
 
-  try { db.prepare('UPDATE users SET last_active = datetime("now") WHERE id = ?').run(result.lastInsertRowid); } catch {}
+  try { db.prepare("UPDATE users SET last_active = datetime('now') WHERE id = ?").run(result.lastInsertRowid); } catch {}
   setAuthCookie(res, token);
   res.status(201).json({
     user: {
@@ -268,7 +268,7 @@ app.post('/api/auth/login', authLimiter, (req, res) => {
 
   console.log(`✅ User logged in (id=${user.id})`);
 
-  try { db.prepare('UPDATE users SET last_active = datetime("now") WHERE id = ?').run(user.id); } catch {}
+  try { db.prepare("UPDATE users SET last_active = datetime('now') WHERE id = ?").run(user.id); } catch {}
   setAuthCookie(res, token);
   res.json({
     user: { id: user.id, name: user.name, email: user.email, country: user.country },
@@ -341,7 +341,7 @@ app.post('/api/auth/complete-profile', authLimiter, (req, res) => {
     { expiresIn: '30d' }
   );
 
-  try { db.prepare('UPDATE users SET last_active = datetime("now") WHERE id = ?').run(user.id); } catch {}
+  try { db.prepare("UPDATE users SET last_active = datetime('now') WHERE id = ?").run(user.id); } catch {}
   setAuthCookie(res, token);
   res.json({ user: { id: user.id, name: user.name, email: user.email, country: user.country } });
 });
@@ -420,7 +420,7 @@ app.post('/api/auth/google', authLimiter, async (req, res) => {
       { expiresIn: '30d' }
     );
 
-    try { db.prepare('UPDATE users SET last_active = datetime("now") WHERE id = ?').run(user.id); } catch {}
+    try { db.prepare("UPDATE users SET last_active = datetime('now') WHERE id = ?").run(user.id); } catch {}
     setAuthCookie(res, jwtToken);
     res.json({
       user: { id: user.id, name: user.name, email: user.email, country: user.country },
