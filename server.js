@@ -88,11 +88,9 @@ try { db.exec("ALTER TABLE contact_messages ADD COLUMN user_id INTEGER"); } catc
 try { db.exec("ALTER TABLE contact_messages ADD COLUMN status TEXT NOT NULL DEFAULT 'pending'"); } catch {}
 try { db.exec("ALTER TABLE users ADD COLUMN suspended INTEGER NOT NULL DEFAULT 0"); } catch {}
 try { db.exec("ALTER TABLE contact_messages ADD COLUMN admin_reply TEXT"); } catch {}
+try { db.exec("ALTER TABLE users ADD COLUMN preferences TEXT NOT NULL DEFAULT '{}'"); } catch {}
 try { db.exec("ALTER TABLE contact_messages ADD COLUMN replied_at DATETIME"); } catch {}
 try { db.exec("ALTER TABLE contact_messages ADD COLUMN seen_at DATETIME"); } catch {}
-try { db.exec("ALTER TABLE users ADD COLUMN theme TEXT NOT NULL DEFAULT 'dark'"); } catch {}
-try { db.exec('ALTER TABLE conversations ADD COLUMN pinned INTEGER NOT NULL DEFAULT 0'); } catch {}
-try { db.exec('ALTER TABLE conversations ADD COLUMN draft TEXT'); } catch {}
 
 // ── Middleware ────────────────────────────────────────────────────────────────
 const ALLOWED_ORIGINS = [
@@ -132,7 +130,6 @@ const ALLOWED_MODELS = new Set([
   'openai/gpt-4o-mini', 'anthropic/claude-3-5-haiku', 'google/gemini-2.5-flash',
   'meta-llama/llama-3.3-70b-instruct:free', 'qwen/qwen3-coder:free',
   'mistralai/mistral-small-3.1-24b-instruct:free', 'google/gemma-3-27b-it:free',
-  'perplexity/sonar', 'perplexity/sonar-pro',
 ]);
 
 // ── Security headers ──────────────────────────────────────────────────────────
@@ -276,26 +273,49 @@ app.post('/api/auth/login', authLimiter, (req, res) => {
 });
 
 // ── GET /api/auth/me ──────────────────────────────────────────────────────────
+function parsePreferences(raw) {
+  try { return raw ? JSON.parse(raw) : {}; } catch { return {}; }
+}
+
 app.get('/api/auth/me', verifyToken, (req, res) => {
   const user = db
-    .prepare('SELECT id, name, email, country, theme, created_at FROM users WHERE id = ?')
+    .prepare('SELECT id, name, email, country, created_at, preferences FROM users WHERE id = ?')
     .get(req.user.id);
 
   if (!user) {
     return res.status(404).json({ error: 'User not found' });
   }
 
+  user.preferences = parsePreferences(user.preferences);
   res.json({ user });
 });
 
-// ── PATCH /api/user/preferences ───────────────────────────────────────────────
+// ── PATCH /api/user/preferences ──────────────────────────────────────────────
+// Merge-patch user preferences (theme, sidebarOpen, adaptiveThinking, ...)
 app.patch('/api/user/preferences', verifyToken, (req, res) => {
-  const { theme } = req.body;
-  if (theme !== undefined) {
-    if (theme !== 'dark' && theme !== 'light') return res.status(400).json({ error: 'Invalid theme' });
-    db.prepare('UPDATE users SET theme = ? WHERE id = ?').run(theme, req.user.id);
+  const updates = req.body && typeof req.body === 'object' ? req.body : {};
+
+  const ALLOWED = {
+    theme:            (v) => v === 'dark' || v === 'light',
+    sidebarOpen:      (v) => typeof v === 'boolean',
+    adaptiveThinking: (v) => typeof v === 'boolean',
+  };
+
+  const clean = {};
+  for (const [k, v] of Object.entries(updates)) {
+    if (ALLOWED[k] && ALLOWED[k](v)) clean[k] = v;
   }
-  res.json({ ok: true });
+
+  const row = db.prepare('SELECT preferences FROM users WHERE id = ?').get(req.user.id);
+  if (!row) return res.status(404).json({ error: 'User not found' });
+
+  const current = parsePreferences(row.preferences);
+  const merged  = { ...current, ...clean };
+
+  db.prepare('UPDATE users SET preferences = ? WHERE id = ?')
+    .run(JSON.stringify(merged), req.user.id);
+
+  res.json({ preferences: merged });
 });
 
 // ── PATCH /api/auth/profile ──────────────────────────────────────────────────
@@ -2471,15 +2491,15 @@ app.get('/admin/conversations/:id/messages', requireAdmin, (req, res) => {
 // ── GET /api/conversations ──────────────────────────────────────────────────
 app.get('/api/conversations', verifyToken, (req, res) => {
   const convs = db.prepare(
-    'SELECT id, title, model, messages, pinned, draft, created_at, updated_at FROM conversations WHERE user_id = ? ORDER BY updated_at DESC'
+    'SELECT id, title, model, messages, created_at, updated_at FROM conversations WHERE user_id = ? ORDER BY updated_at DESC'
   ).all(req.user.id);
-  res.json(convs.map(c => ({ ...c, pinned: !!c.pinned, messages: JSON.parse(c.messages) })));
+  res.json(convs.map(c => ({ ...c, messages: JSON.parse(c.messages) })));
 });
 
 // ── PUT /api/conversations/:id ────────────────────────────────────────────────
 app.put('/api/conversations/:id', verifyToken, (req, res) => {
   const { id } = req.params;
-  const { title, model, messages, pinned, draft, created_at, updated_at } = req.body;
+  const { title, model, messages, created_at, updated_at } = req.body;
   if (!id || !Array.isArray(messages)) return res.status(400).json({ error: 'Missing fields' });
 
   // Strip base64 blobs before storing to keep conversations table lean
@@ -2491,14 +2511,12 @@ app.put('/api/conversations/:id', verifyToken, (req, res) => {
   }));
 
   db.prepare(`
-    INSERT INTO conversations (id, user_id, title, model, messages, pinned, draft, created_at, updated_at)
-    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+    INSERT INTO conversations (id, user_id, title, model, messages, created_at, updated_at)
+    VALUES (?, ?, ?, ?, ?, ?, ?)
     ON CONFLICT(id) DO UPDATE SET
       title      = excluded.title,
       model      = excluded.model,
       messages   = excluded.messages,
-      pinned     = excluded.pinned,
-      draft      = excluded.draft,
       updated_at = excluded.updated_at
     WHERE conversations.user_id = ?
   `).run(
@@ -2506,8 +2524,6 @@ app.put('/api/conversations/:id', verifyToken, (req, res) => {
     title || 'New Chat',
     model || 'google/gemini-2.5-flash',
     JSON.stringify(stripped),
-    pinned ? 1 : 0,
-    draft || null,
     created_at || Date.now(),
     updated_at || Date.now(),
     req.user.id
