@@ -2692,7 +2692,9 @@ app.delete('/api/projects/:id', verifyToken, (req, res) => {
 app.get('/api/media/:conversationId', verifyToken, (req, res) => {
   const conv = db.prepare('SELECT messages FROM conversations WHERE id = ? AND user_id = ?')
     .get(req.params.conversationId, req.user.id);
-  if (!conv) return res.status(404).json({ error: 'Not found' });
+  // Newly-created conversations may not be persisted yet; return empty media
+  // instead of 404 so the client doesn't log spurious errors.
+  if (!conv) return res.json({});
 
   const messages = JSON.parse(conv.messages);
   const messageIds = messages.map(m => m.id);
