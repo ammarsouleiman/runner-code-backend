@@ -79,6 +79,16 @@ db.exec(`
     user_email TEXT    NOT NULL,
     created_at DATETIME DEFAULT CURRENT_TIMESTAMP
   );
+
+  CREATE TABLE IF NOT EXISTS projects (
+    id           TEXT    PRIMARY KEY,
+    user_id      INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    name         TEXT    NOT NULL,
+    color        TEXT    NOT NULL DEFAULT '#e31e24',
+    instructions TEXT    NOT NULL DEFAULT '',
+    created_at   INTEGER NOT NULL,
+    updated_at   INTEGER NOT NULL
+  );
 `);
 
 // ── Migrations ────────────────────────────────────────────────────────────────
@@ -93,6 +103,10 @@ try { db.exec("ALTER TABLE contact_messages ADD COLUMN replied_at DATETIME"); } 
 try { db.exec("ALTER TABLE contact_messages ADD COLUMN seen_at DATETIME"); } catch {}
 try { db.exec("ALTER TABLE conversations ADD COLUMN pinned INTEGER NOT NULL DEFAULT 0"); } catch {}
 try { db.exec("ALTER TABLE conversations ADD COLUMN draft TEXT NOT NULL DEFAULT ''"); } catch {}
+// project_id is nullable on purpose — null means "no project / Recents".
+try { db.exec("ALTER TABLE conversations ADD COLUMN project_id TEXT REFERENCES projects(id) ON DELETE SET NULL"); } catch {}
+try { db.exec("CREATE INDEX IF NOT EXISTS idx_conversations_project ON conversations(user_id, project_id)"); } catch {}
+try { db.exec("CREATE INDEX IF NOT EXISTS idx_projects_user ON projects(user_id, updated_at DESC)"); } catch {}
 
 // ── Middleware ────────────────────────────────────────────────────────────────
 const ALLOWED_ORIGINS = [
@@ -2493,15 +2507,20 @@ app.get('/admin/conversations/:id/messages', requireAdmin, (req, res) => {
 // ── GET /api/conversations ──────────────────────────────────────────────────
 app.get('/api/conversations', verifyToken, (req, res) => {
   const convs = db.prepare(
-    'SELECT id, title, model, messages, pinned, draft, created_at, updated_at FROM conversations WHERE user_id = ? ORDER BY pinned DESC, updated_at DESC'
+    'SELECT id, title, model, messages, pinned, draft, project_id, created_at, updated_at FROM conversations WHERE user_id = ? ORDER BY pinned DESC, updated_at DESC'
   ).all(req.user.id);
-  res.json(convs.map(c => ({ ...c, pinned: !!c.pinned, messages: JSON.parse(c.messages) })));
+  res.json(convs.map(c => ({
+    ...c,
+    pinned: !!c.pinned,
+    projectId: c.project_id || null,
+    messages: JSON.parse(c.messages),
+  })));
 });
 
 // ── PUT /api/conversations/:id ────────────────────────────────────────────────
 app.put('/api/conversations/:id', verifyToken, (req, res) => {
   const { id } = req.params;
-  const { title, model, messages, pinned, draft, created_at, updated_at } = req.body;
+  const { title, model, messages, pinned, draft, projectId, project_id, created_at, updated_at } = req.body;
   if (!id || !Array.isArray(messages)) return res.status(400).json({ error: 'Missing fields' });
 
   // Strip base64 blobs before storing to keep conversations table lean
@@ -2512,15 +2531,25 @@ app.put('/api/conversations/:id', verifyToken, (req, res) => {
     pdfUrl: undefined,
   }));
 
+  // Validate project ownership if a projectId is supplied so users can't
+  // attach their conversation to a project owned by someone else.
+  const rawProjectId = projectId !== undefined ? projectId : project_id;
+  let resolvedProjectId = null;
+  if (rawProjectId) {
+    const owned = db.prepare('SELECT 1 FROM projects WHERE id = ? AND user_id = ?').get(rawProjectId, req.user.id);
+    if (owned) resolvedProjectId = rawProjectId;
+  }
+
   db.prepare(`
-    INSERT INTO conversations (id, user_id, title, model, messages, pinned, draft, created_at, updated_at)
-    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+    INSERT INTO conversations (id, user_id, title, model, messages, pinned, draft, project_id, created_at, updated_at)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     ON CONFLICT(id) DO UPDATE SET
       title      = excluded.title,
       model      = excluded.model,
       messages   = excluded.messages,
       pinned     = excluded.pinned,
       draft      = excluded.draft,
+      project_id = excluded.project_id,
       updated_at = excluded.updated_at
     WHERE conversations.user_id = ?
   `).run(
@@ -2530,6 +2559,7 @@ app.put('/api/conversations/:id', verifyToken, (req, res) => {
     JSON.stringify(stripped),
     pinned ? 1 : 0,
     typeof draft === 'string' ? draft : '',
+    resolvedProjectId,
     created_at || Date.now(),
     updated_at || Date.now(),
     req.user.id
@@ -2578,6 +2608,78 @@ app.delete('/api/conversations/:id', verifyToken, (req, res) => {
         WHERE conversations.user_id = ?
       )
   `).run(req.user.id, req.user.id);
+  res.json({ ok: true });
+});
+
+// ─── Projects (Claude-style folders with shared instructions) ───────────────
+function mapProjectRow(row) {
+  if (!row) return null;
+  return {
+    id: row.id,
+    name: row.name,
+    color: row.color,
+    instructions: row.instructions,
+    createdAt: row.created_at,
+    updatedAt: row.updated_at,
+  };
+}
+
+app.get('/api/projects', verifyToken, (req, res) => {
+  const rows = db.prepare(
+    'SELECT id, name, color, instructions, created_at, updated_at FROM projects WHERE user_id = ? ORDER BY updated_at DESC'
+  ).all(req.user.id);
+  res.json(rows.map(mapProjectRow));
+});
+
+app.post('/api/projects', verifyToken, (req, res) => {
+  const { id, name, color, instructions } = req.body || {};
+  if (!id || typeof id !== 'string') return res.status(400).json({ error: 'Missing id' });
+  const trimmedName = (typeof name === 'string' ? name.trim() : '') || 'New Project';
+  if (trimmedName.length > 100) return res.status(400).json({ error: 'Name too long' });
+  const safeColor = (typeof color === 'string' && /^#[0-9a-fA-F]{6}$/.test(color)) ? color : '#e31e24';
+  const safeInstructions = typeof instructions === 'string' ? instructions.slice(0, 20000) : '';
+  const now = Date.now();
+  try {
+    db.prepare(`
+      INSERT INTO projects (id, user_id, name, color, instructions, created_at, updated_at)
+      VALUES (?, ?, ?, ?, ?, ?, ?)
+    `).run(id, req.user.id, trimmedName, safeColor, safeInstructions, now, now);
+  } catch (err) {
+    return res.status(409).json({ error: 'Project id already exists' });
+  }
+  res.json({
+    id, name: trimmedName, color: safeColor, instructions: safeInstructions,
+    createdAt: now, updatedAt: now,
+  });
+});
+
+app.put('/api/projects/:id', verifyToken, (req, res) => {
+  const { id } = req.params;
+  const row = db.prepare('SELECT id, name, color, instructions FROM projects WHERE id = ? AND user_id = ?')
+    .get(id, req.user.id);
+  if (!row) return res.status(404).json({ error: 'Not found' });
+
+  const { name, color, instructions } = req.body || {};
+  const nextName = (typeof name === 'string' && name.trim()) ? name.trim().slice(0, 100) : row.name;
+  const nextColor = (typeof color === 'string' && /^#[0-9a-fA-F]{6}$/.test(color)) ? color : row.color;
+  const nextInstructions = typeof instructions === 'string' ? instructions.slice(0, 20000) : row.instructions;
+  const now = Date.now();
+
+  db.prepare(`
+    UPDATE projects SET name = ?, color = ?, instructions = ?, updated_at = ?
+    WHERE id = ? AND user_id = ?
+  `).run(nextName, nextColor, nextInstructions, now, id, req.user.id);
+
+  res.json({
+    id, name: nextName, color: nextColor, instructions: nextInstructions,
+    updatedAt: now,
+  });
+});
+
+app.delete('/api/projects/:id', verifyToken, (req, res) => {
+  // ON DELETE SET NULL on the FK clears project_id from conversations automatically.
+  const info = db.prepare('DELETE FROM projects WHERE id = ? AND user_id = ?').run(req.params.id, req.user.id);
+  if (info.changes === 0) return res.status(404).json({ error: 'Not found' });
   res.json({ ok: true });
 });
 
