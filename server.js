@@ -92,6 +92,7 @@ try { db.exec("ALTER TABLE users ADD COLUMN preferences TEXT NOT NULL DEFAULT '{
 try { db.exec("ALTER TABLE contact_messages ADD COLUMN replied_at DATETIME"); } catch {}
 try { db.exec("ALTER TABLE contact_messages ADD COLUMN seen_at DATETIME"); } catch {}
 try { db.exec("ALTER TABLE conversations ADD COLUMN pinned INTEGER NOT NULL DEFAULT 0"); } catch {}
+try { db.exec("ALTER TABLE conversations ADD COLUMN draft TEXT NOT NULL DEFAULT ''"); } catch {}
 
 // ── Middleware ────────────────────────────────────────────────────────────────
 const ALLOWED_ORIGINS = [
@@ -2492,7 +2493,7 @@ app.get('/admin/conversations/:id/messages', requireAdmin, (req, res) => {
 // ── GET /api/conversations ──────────────────────────────────────────────────
 app.get('/api/conversations', verifyToken, (req, res) => {
   const convs = db.prepare(
-    'SELECT id, title, model, messages, pinned, created_at, updated_at FROM conversations WHERE user_id = ? ORDER BY pinned DESC, updated_at DESC'
+    'SELECT id, title, model, messages, pinned, draft, created_at, updated_at FROM conversations WHERE user_id = ? ORDER BY pinned DESC, updated_at DESC'
   ).all(req.user.id);
   res.json(convs.map(c => ({ ...c, pinned: !!c.pinned, messages: JSON.parse(c.messages) })));
 });
@@ -2500,7 +2501,7 @@ app.get('/api/conversations', verifyToken, (req, res) => {
 // ── PUT /api/conversations/:id ────────────────────────────────────────────────
 app.put('/api/conversations/:id', verifyToken, (req, res) => {
   const { id } = req.params;
-  const { title, model, messages, pinned, created_at, updated_at } = req.body;
+  const { title, model, messages, pinned, draft, created_at, updated_at } = req.body;
   if (!id || !Array.isArray(messages)) return res.status(400).json({ error: 'Missing fields' });
 
   // Strip base64 blobs before storing to keep conversations table lean
@@ -2512,13 +2513,14 @@ app.put('/api/conversations/:id', verifyToken, (req, res) => {
   }));
 
   db.prepare(`
-    INSERT INTO conversations (id, user_id, title, model, messages, pinned, created_at, updated_at)
-    VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+    INSERT INTO conversations (id, user_id, title, model, messages, pinned, draft, created_at, updated_at)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
     ON CONFLICT(id) DO UPDATE SET
       title      = excluded.title,
       model      = excluded.model,
       messages   = excluded.messages,
       pinned     = excluded.pinned,
+      draft      = excluded.draft,
       updated_at = excluded.updated_at
     WHERE conversations.user_id = ?
   `).run(
@@ -2527,6 +2529,7 @@ app.put('/api/conversations/:id', verifyToken, (req, res) => {
     model || 'google/gemini-2.5-flash',
     JSON.stringify(stripped),
     pinned ? 1 : 0,
+    typeof draft === 'string' ? draft : '',
     created_at || Date.now(),
     updated_at || Date.now(),
     req.user.id
