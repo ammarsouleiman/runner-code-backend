@@ -2677,8 +2677,13 @@ app.put('/api/projects/:id', verifyToken, (req, res) => {
 });
 
 app.delete('/api/projects/:id', verifyToken, (req, res) => {
-  // ON DELETE SET NULL on the FK clears project_id from conversations automatically.
-  const info = db.prepare('DELETE FROM projects WHERE id = ? AND user_id = ?').run(req.params.id, req.user.id);
+  // Explicitly cascade: delete all conversations belonging to this project,
+  // then the project itself. (Existing FK was ON DELETE SET NULL.)
+  const tx = db.transaction((projectId, userId) => {
+    db.prepare('DELETE FROM conversations WHERE project_id = ? AND user_id = ?').run(projectId, userId);
+    return db.prepare('DELETE FROM projects WHERE id = ? AND user_id = ?').run(projectId, userId);
+  });
+  const info = tx(req.params.id, req.user.id);
   if (info.changes === 0) return res.status(404).json({ error: 'Not found' });
   res.json({ ok: true });
 });
