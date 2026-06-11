@@ -151,7 +151,7 @@ const ALLOWED_MODELS = new Set([
   'openai/gpt-4o', 'anthropic/claude-3.7-sonnet', 'openai/o1',
   'openai/gpt-4o-mini', 'anthropic/claude-3-5-haiku', 'google/gemini-2.5-flash',
   'meta-llama/llama-3.3-70b-instruct:free', 'qwen/qwen3-coder:free',
-  'mistralai/mistral-small-3.2-24b-instruct:free', 'deepseek/deepseek-chat-v3.1:free',
+  'openai/gpt-oss-20b:free', 'google/gemma-4-31b-it:free',
 ]);
 
 // ── Security headers ──────────────────────────────────────────────────────────
