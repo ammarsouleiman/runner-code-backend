@@ -148,8 +148,8 @@ const chatLimiter = rateLimit({ windowMs: 60 * 1000, max: 30, standardHeaders: t
 
 // ── Allowed AI models ─────────────────────────────────────────────────────────
 const ALLOWED_MODELS = new Set([
-  'openai/gpt-4o', 'anthropic/claude-3.7-sonnet', 'openai/o1',
-  'openai/gpt-4o-mini', 'anthropic/claude-3-5-haiku', 'google/gemini-2.5-flash',
+  'openai/gpt-4o', 'anthropic/claude-sonnet-4.5', 'openai/o1',
+  'openai/gpt-4o-mini', 'anthropic/claude-haiku-4.5', 'google/gemini-2.5-flash',
   'meta-llama/llama-3.3-70b-instruct:free', 'qwen/qwen3-coder:free',
   'openai/gpt-oss-20b:free', 'google/gemma-4-31b-it:free',
 ]);
