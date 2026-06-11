@@ -166,7 +166,8 @@ const ALLOWED_MODELS = new Set([
 
 // Maximum tokens any single chat completion may request from upstream.
 // Protects against runaway costs from clients requesting huge outputs.
-const MAX_OUTPUT_TOKENS = 4096;
+// Matches the client-side default (8192) so legitimate requests are unchanged.
+const MAX_OUTPUT_TOKENS = 8192;
 
 const IS_PROD = process.env.NODE_ENV === 'production';
 
