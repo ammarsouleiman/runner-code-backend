@@ -7,6 +7,7 @@ const jwt = require('jsonwebtoken');
 const cookieParser = require('cookie-parser');
 const Database = require('better-sqlite3');
 const path = require('path');
+const crypto = require('crypto');
 const { Readable } = require('stream');
 const rateLimit = require('express-rate-limit');
 const { OAuth2Client } = require('google-auth-library');
@@ -15,10 +16,15 @@ require('dotenv').config({ path: path.join(__dirname, '.env') });
 
 const app = express();
 app.set('trust proxy', 1); // Trust Railway's reverse proxy for accurate IP detection
+app.disable('x-powered-by');
 const PORT = process.env.PORT || 8080;
 
 if (!process.env.JWT_SECRET && process.env.NODE_ENV === 'production') {
   console.error('\u274c FATAL: JWT_SECRET is not set in production');
+  process.exit(1);
+}
+if (process.env.NODE_ENV === 'production' && process.env.JWT_SECRET.length < 32) {
+  console.error('\u274c FATAL: JWT_SECRET must be at least 32 characters in production');
   process.exit(1);
 }
 const JWT_SECRET = process.env.JWT_SECRET || 'dev-only-insecure-secret';
@@ -150,8 +156,16 @@ const ALLOWED_MODELS = new Set([
 
 // ── Security headers ──────────────────────────────────────────────────────────
 app.use((req, res, next) => {
-  res.setHeader('X-Frame-Options', 'SAMEORIGIN');
+  res.setHeader('X-Frame-Options', 'DENY');
   res.setHeader('X-Content-Type-Options', 'nosniff');
+  res.setHeader('Referrer-Policy', 'strict-origin-when-cross-origin');
+  res.setHeader('X-Permitted-Cross-Domain-Policies', 'none');
+  res.setHeader('X-DNS-Prefetch-Control', 'off');
+  res.setHeader('Permissions-Policy', 'geolocation=(), microphone=(), camera=(), payment=(), usb=()');
+  res.removeHeader('X-Powered-By');
+  if (process.env.NODE_ENV === 'production') {
+    res.setHeader('Strict-Transport-Security', 'max-age=31536000; includeSubDomains; preload');
+  }
   next();
 });
 
@@ -665,19 +679,26 @@ async function login(e){
 app.post('/admin/login', (req, res) => {
   const adminKey = process.env.ADMIN_KEY;
   if (!adminKey) return res.status(500).json({ error: 'Admin key not configured' });
-  if (req.body?.key !== adminKey) return res.status(401).json({ error: 'Invalid admin key' });
+  const provided = typeof req.body?.key === 'string' ? req.body.key : '';
+  // Constant-time comparison to avoid leaking key length/prefix via timing.
+  const a = Buffer.from(provided);
+  const b = Buffer.from(adminKey);
+  if (a.length !== b.length || !crypto.timingSafeEqual(a, b)) {
+    return res.status(401).json({ error: 'Invalid admin key' });
+  }
   res.cookie(ADMIN_COOKIE, adminKey, {
     httpOnly: true,
     secure: process.env.NODE_ENV === 'production',
     sameSite: 'lax',
     maxAge: 12 * 60 * 60 * 1000, // 12h
+    path: '/',
   });
   res.json({ ok: true });
 });
 
 // ── POST /admin/logout ────────────────────────────────────────────────────────
 app.post('/admin/logout', (req, res) => {
-  res.clearCookie(ADMIN_COOKIE);
+  res.clearCookie(ADMIN_COOKIE, { path: '/' });
   res.json({ ok: true });
 });
 
@@ -2744,6 +2765,25 @@ app.get('/api/reactions/:conversationId', verifyToken, (req, res) => {
     'SELECT message_id, reaction FROM reactions WHERE user_id = ? AND conversation_id = ?'
   ).all(req.user.id, req.params.conversationId);
   res.json(rows);
+});
+
+// ── 404 fallback for unknown /api/* routes ───────────────────────────────────
+app.use('/api', (req, res) => {
+  res.status(404).json({ error: 'Not found' });
+});
+
+// ── Global error handler ─────────────────────────────────────────────────────
+// Prevents stack traces and internal error details from leaking to clients.
+app.use((err, req, res, _next) => {
+  if (err && typeof err.message === 'string' && err.message.startsWith('CORS:')) {
+    return res.status(403).json({ error: 'Origin not allowed' });
+  }
+  if (err?.type === 'entity.too.large') {
+    return res.status(413).json({ error: 'Request body too large' });
+  }
+  console.error('[unhandled]', err?.message || err);
+  if (res.headersSent) return;
+  res.status(500).json({ error: 'Internal server error' });
 });
 
 // ── Start ─────────────────────────────────────────────────────────────────────
