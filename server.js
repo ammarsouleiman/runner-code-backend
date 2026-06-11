@@ -7,7 +7,6 @@ const jwt = require('jsonwebtoken');
 const cookieParser = require('cookie-parser');
 const Database = require('better-sqlite3');
 const path = require('path');
-const crypto = require('crypto');
 const { Readable } = require('stream');
 const rateLimit = require('express-rate-limit');
 const { OAuth2Client } = require('google-auth-library');
@@ -18,17 +17,11 @@ const app = express();
 app.set('trust proxy', 1); // Trust Railway's reverse proxy for accurate IP detection
 const PORT = process.env.PORT || 8080;
 
-// JWT secret is mandatory in every environment. Refusing to boot when it is
-// missing prevents the server from silently using an insecure fallback.
-if (!process.env.JWT_SECRET) {
-  console.error('\u274c FATAL: JWT_SECRET environment variable is required');
+if (!process.env.JWT_SECRET && process.env.NODE_ENV === 'production') {
+  console.error('\u274c FATAL: JWT_SECRET is not set in production');
   process.exit(1);
 }
-if (process.env.JWT_SECRET.length < 32) {
-  console.error('\u274c FATAL: JWT_SECRET must be at least 32 characters');
-  process.exit(1);
-}
-const JWT_SECRET = process.env.JWT_SECRET;
+const JWT_SECRET = process.env.JWT_SECRET || 'dev-only-insecure-secret';
 
 // ── Database setup ────────────────────────────────────────────────────────────
 // In production: use /app/data (Railway persistent volume)
@@ -136,9 +129,7 @@ app.use(cors({
   credentials: true,
 }));
 app.use(cookieParser());
-// 5mb is generous for JSON payloads (text + small base64 thumbnails); larger
-// bodies are an attack surface and not used by any legitimate endpoint.
-app.use(express.json({ limit: '5mb' }));
+app.use(express.json({ limit: '20mb' }));
 
 // ── Google OAuth client ─────────────────────────────────────────────────────
 const googleClient = process.env.GOOGLE_CLIENT_ID
@@ -146,45 +137,8 @@ const googleClient = process.env.GOOGLE_CLIENT_ID
   : null;
 
 // ── Rate limiters ─────────────────────────────────────────────────────────────
-const limiterDefaults = { standardHeaders: true, legacyHeaders: false };
-const authLimiter = rateLimit({ ...limiterDefaults, windowMs: 15 * 60 * 1000, max: 10 });
-// For authenticated routes, key by user id when available so shared IPs
-// (NAT, mobile carriers, offices) don't make legitimate users punish each
-// other, and a single user can't escape the cap by rotating their IP.
-const userOrIpKey = (req) => (req.user?.id ? `u:${req.user.id}` : `ip:${req.ip}`);
-// /api/chat is called multiple times per user message (image-intent classifier
-// + main answer + title/suggestions generator), so a single user prompt
-// already costs ~3 calls. 90/min comfortably allows ~30 prompts/minute while
-// still bounding abuse. skipFailedRequests prevents transient 4xx from eating
-// the quota during normal flows.
-const chatLimiter = rateLimit({
-  ...limiterDefaults,
-  windowMs: 60 * 1000,
-  max: 90,
-  skipFailedRequests: true,
-  keyGenerator: userOrIpKey,
-});
-// Generous per-user/IP limit for normal authenticated mutations (write endpoints).
-const generalLimiter = rateLimit({
-  ...limiterDefaults,
-  windowMs: 60 * 1000,
-  max: 120,
-  keyGenerator: userOrIpKey,
-});
-// Tight limit for sensitive destructive actions (account delete, contact form).
-const sensitiveLimiter = rateLimit({
-  ...limiterDefaults,
-  windowMs: 60 * 60 * 1000,
-  max: 5,
-  keyGenerator: userOrIpKey,
-});
-// Cap on image search to keep Pexels usage predictable.
-const imageLimiter = rateLimit({
-  ...limiterDefaults,
-  windowMs: 60 * 1000,
-  max: 30,
-  keyGenerator: userOrIpKey,
-});
+const authLimiter = rateLimit({ windowMs: 15 * 60 * 1000, max: 10, standardHeaders: true, legacyHeaders: false });
+const chatLimiter = rateLimit({ windowMs: 60 * 1000, max: 30, standardHeaders: true, legacyHeaders: false });
 
 // ── Allowed AI models ─────────────────────────────────────────────────────────
 const ALLOWED_MODELS = new Set([
@@ -194,36 +148,19 @@ const ALLOWED_MODELS = new Set([
   'mistralai/mistral-small-3.1-24b-instruct:free', 'google/gemma-3-27b-it:free',
 ]);
 
-// Maximum tokens any single chat completion may request from upstream.
-// Protects against runaway costs from clients requesting huge outputs.
-// Matches the client-side default (8192) so legitimate requests are unchanged.
-const MAX_OUTPUT_TOKENS = 8192;
-
-const IS_PROD = process.env.NODE_ENV === 'production';
-
 // ── Security headers ──────────────────────────────────────────────────────────
 app.use((req, res, next) => {
-  res.setHeader('X-Frame-Options', 'DENY');
+  res.setHeader('X-Frame-Options', 'SAMEORIGIN');
   res.setHeader('X-Content-Type-Options', 'nosniff');
-  res.setHeader('Referrer-Policy', 'strict-origin-when-cross-origin');
-  res.setHeader('X-Permitted-Cross-Domain-Policies', 'none');
-  res.setHeader('X-DNS-Prefetch-Control', 'off');
-  res.setHeader('Cross-Origin-Resource-Policy', 'cross-origin');
-  res.setHeader('Permissions-Policy', 'geolocation=(), microphone=(), camera=(), payment=(), usb=()');
-  // Hide Express fingerprint
-  res.removeHeader('X-Powered-By');
-  if (IS_PROD) {
-    res.setHeader('Strict-Transport-Security', 'max-age=31536000; includeSubDomains; preload');
-  }
   next();
 });
-app.disable('x-powered-by');
 
 // ── Health check ──────────────────────────────────────────────────────────────
 app.get('/health', (req, res) => res.json({ status: 'ok' }));
 
 // ── Cookie helpers ───────────────────────────────────────────────────────────
 const COOKIE_NAME = 'rc_token';
+const IS_PROD = process.env.NODE_ENV === 'production';
 
 function setAuthCookie(res, token) {
   res.cookie(COOKIE_NAME, token, {
@@ -461,7 +398,7 @@ app.post('/api/auth/logout', (req, res) => {
 });
 
 // ── DELETE /api/auth/account ──────────────────────────────────────────────────
-app.delete('/api/auth/account', verifyToken, sensitiveLimiter, (req, res) => {
+app.delete('/api/auth/account', verifyToken, (req, res) => {
   const user = db.prepare('SELECT id, name, email FROM users WHERE id = ?').get(req.user.id);
   if (!user) {
     return res.status(404).json({ error: 'User not found' });
@@ -544,16 +481,9 @@ app.post('/api/chat', verifyToken, chatLimiter, async (req, res) => {
   const OPENROUTER_KEY = process.env.OPENROUTER_API_KEY;
   if (!OPENROUTER_KEY) return res.status(503).json({ error: 'AI service not configured' });
 
-  const { model } = req.body || {};
+  const { model } = req.body;
   if (model && !ALLOWED_MODELS.has(model)) {
     return res.status(400).json({ error: 'Model not allowed' });
-  }
-
-  // Cap max_tokens server-side to bound costs even if a client requests more.
-  const safeBody = { ...(req.body || {}) };
-  const requested = Number(safeBody.max_tokens);
-  if (!Number.isFinite(requested) || requested < 1 || requested > MAX_OUTPUT_TOKENS) {
-    safeBody.max_tokens = MAX_OUTPUT_TOKENS;
   }
 
   try {
@@ -565,23 +495,15 @@ app.post('/api/chat', verifyToken, chatLimiter, async (req, res) => {
         'HTTP-Referer': 'https://platform.runner-code.com',
         'X-Title': 'Runner Code AI',
       },
-      body: JSON.stringify(safeBody),
+      body: JSON.stringify(req.body),
     });
 
     const contentType = upstream.headers.get('content-type') || '';
 
     if (!upstream.ok) {
-      // Read upstream payload for logging only — never echo it to the client.
-      const raw = await upstream.text().catch(() => '');
+      const err = await upstream.json().catch(() => ({}));
       const status = upstream.status === 404 ? 502 : upstream.status;
-      console.warn('[chat] upstream error', { status: upstream.status, model, snippet: raw.slice(0, 300) });
-      const message =
-        status === 401 ? 'AI service authentication failed' :
-        status === 402 ? 'AI service quota exhausted' :
-        status === 429 ? 'AI service rate limit reached — try again shortly' :
-        status >= 500 ? 'AI service is temporarily unavailable' :
-        'AI request rejected';
-      return res.status(status).json({ error: message });
+      return res.status(status).json(err);
     }
 
     // Stream response directly to client
@@ -590,70 +512,37 @@ app.post('/api/chat', verifyToken, chatLimiter, async (req, res) => {
     res.setHeader('Cache-Control', 'no-cache');
     Readable.fromWeb(upstream.body).pipe(res);
   } catch (err) {
-    console.error('[chat] upstream exception:', err.message);
     res.status(502).json({ error: 'Upstream AI error' });
   }
 });
 
 // ── GET /api/images ───────────────────────────────────────────────────────────
 // Proxy to Pexels — keeps API key server-side only
-app.get('/api/images', verifyToken, imageLimiter, async (req, res) => {
+app.get('/api/images', verifyToken, async (req, res) => {
   const PEXELS_KEY = process.env.PEXELS_API_KEY;
   if (!PEXELS_KEY) return res.status(503).json({ error: 'Image service not configured' });
 
   const { query, per_page = '6', page = '1' } = req.query;
   const safePerPage = Math.min(Math.max(parseInt(per_page, 10) || 6, 1), 20);
   const safePage = Math.max(parseInt(page, 10) || 1, 1);
-  if (!query || typeof query !== 'string' || query.length > 200) {
-    return res.status(400).json({ error: 'query is required' });
-  }
+  if (!query) return res.status(400).json({ error: 'query is required' });
 
   try {
     const upstream = await fetch(
       `https://api.pexels.com/v1/search?query=${encodeURIComponent(query)}&per_page=${safePerPage}&page=${safePage}`,
       { headers: { Authorization: PEXELS_KEY } }
     );
-    if (!upstream.ok) {
-      console.warn('[images] upstream error', upstream.status);
-      return res.status(502).json({ error: 'Upstream image error' });
-    }
     const data = await upstream.json();
-    // Forward only the fields the client consumes; never relay raw upstream payload.
-    res.json({
-      photos: Array.isArray(data?.photos)
-        ? data.photos.map((p) => ({
-            id: p.id,
-            width: p.width,
-            height: p.height,
-            url: p.url,
-            photographer: p.photographer,
-            photographer_url: p.photographer_url,
-            alt: p.alt,
-            src: {
-              tiny: p.src?.tiny,
-              small: p.src?.small,
-              medium: p.src?.medium,
-              large: p.src?.large,
-              original: p.src?.original,
-            },
-          }))
-        : [],
-      page: data?.page,
-      per_page: data?.per_page,
-      total_results: data?.total_results,
-      next_page: data?.next_page,
-    });
+    res.json(data);
   } catch (err) {
-    console.error('[images] upstream exception:', err.message);
     res.status(502).json({ error: 'Upstream image error' });
   }
 });
 
 // ── Admin authentication ──────────────────────────────────────────────────────
-// Protected with ADMIN_KEY env variable. Login via POST /admin/login validates
-// the key and issues a random session token stored in an httpOnly cookie. The
-// admin key itself never lives in any cookie and `?key=...` URL bypass is not
-// supported.
+// Protected with ADMIN_KEY env variable. Login via POST /admin/login sets an
+// httpOnly cookie 'admin_session'. All admin endpoints require either that
+// cookie OR a ?key=... query param (legacy).
 function escapeHtml(str) {
   return String(str)
     .replace(/&/g, '&amp;')
@@ -664,42 +553,10 @@ function escapeHtml(str) {
 }
 
 const ADMIN_COOKIE = 'admin_session';
-const ADMIN_SESSION_TTL_MS = 12 * 60 * 60 * 1000; // 12h
-// Session tokens are kept in-memory; a server restart simply forces re-login,
-// which is acceptable for an admin-only panel and avoids a persistent surface
-// to steal tokens from.
-const adminSessions = new Map(); // token -> expiresAt (ms)
-
-function pruneAdminSessions() {
-  const now = Date.now();
-  for (const [token, expiresAt] of adminSessions) {
-    if (expiresAt <= now) adminSessions.delete(token);
-  }
-}
-
-function createAdminSession() {
-  pruneAdminSessions();
-  const token = crypto.randomBytes(32).toString('hex');
-  adminSessions.set(token, Date.now() + ADMIN_SESSION_TTL_MS);
-  return token;
-}
-
-function destroyAdminSession(token) {
-  if (token) adminSessions.delete(token);
-}
-
 function isAdminAuthed(req) {
   const adminKey = process.env.ADMIN_KEY;
   if (!adminKey) return false;
-  const token = req.cookies?.[ADMIN_COOKIE];
-  if (!token || typeof token !== 'string') return false;
-  const expiresAt = adminSessions.get(token);
-  if (!expiresAt) return false;
-  if (expiresAt <= Date.now()) {
-    adminSessions.delete(token);
-    return false;
-  }
-  return true;
+  return req.cookies[ADMIN_COOKIE] === adminKey || req.query.key === adminKey;
 }
 function requireAdmin(req, res, next) {
   if (!isAdminAuthed(req)) return res.status(401).json({ error: 'Unauthorized' });
@@ -805,31 +662,22 @@ async function login(e){
 });
 
 // ── POST /admin/login ─────────────────────────────────────────────────────────
-app.post('/admin/login', authLimiter, (req, res) => {
+app.post('/admin/login', (req, res) => {
   const adminKey = process.env.ADMIN_KEY;
   if (!adminKey) return res.status(500).json({ error: 'Admin key not configured' });
-  const provided = typeof req.body?.key === 'string' ? req.body.key : '';
-  // Constant-time comparison to avoid leaking key length/prefix via timing.
-  const a = Buffer.from(provided);
-  const b = Buffer.from(adminKey);
-  if (a.length !== b.length || !crypto.timingSafeEqual(a, b)) {
-    return res.status(401).json({ error: 'Invalid admin key' });
-  }
-  const sessionToken = createAdminSession();
-  res.cookie(ADMIN_COOKIE, sessionToken, {
+  if (req.body?.key !== adminKey) return res.status(401).json({ error: 'Invalid admin key' });
+  res.cookie(ADMIN_COOKIE, adminKey, {
     httpOnly: true,
-    secure: IS_PROD,
+    secure: process.env.NODE_ENV === 'production',
     sameSite: 'lax',
-    maxAge: ADMIN_SESSION_TTL_MS,
-    path: '/',
+    maxAge: 12 * 60 * 60 * 1000, // 12h
   });
   res.json({ ok: true });
 });
 
 // ── POST /admin/logout ────────────────────────────────────────────────────────
 app.post('/admin/logout', (req, res) => {
-  destroyAdminSession(req.cookies?.[ADMIN_COOKIE]);
-  res.clearCookie(ADMIN_COOKIE, { path: '/' });
+  res.clearCookie(ADMIN_COOKIE);
   res.json({ ok: true });
 });
 
@@ -2434,7 +2282,7 @@ app.get('/admin/dashboard', (req, res) => {
 });
 
 // ── POST /api/contact ────────────────────────────────────────────────────────
-app.post('/api/contact', verifyToken, sensitiveLimiter, (req, res) => {
+app.post('/api/contact', verifyToken, (req, res) => {
   const { type, subject, message } = req.body;
   const allowedTypes = ['bug', 'suggestion', 'request', 'other'];
   if (!type || !allowedTypes.includes(type)) return res.status(400).json({ error: 'Invalid type' });
@@ -2492,7 +2340,7 @@ app.get('/api/notifications/count', verifyToken, (req, res) => {
 });
 
 // ── POST /api/notifications/mark-seen — mark all unread replies as seen ────
-app.post('/api/notifications/mark-seen', verifyToken, generalLimiter, (req, res) => {
+app.post('/api/notifications/mark-seen', verifyToken, (req, res) => {
   try {
     db.prepare(
       `UPDATE contact_messages SET seen_at = CURRENT_TIMESTAMP
@@ -2670,7 +2518,7 @@ app.get('/api/conversations', verifyToken, (req, res) => {
 });
 
 // ── PUT /api/conversations/:id ────────────────────────────────────────────────
-app.put('/api/conversations/:id', verifyToken, generalLimiter, (req, res) => {
+app.put('/api/conversations/:id', verifyToken, (req, res) => {
   const { id } = req.params;
   const { title, model, messages, pinned, draft, projectId, project_id, created_at, updated_at } = req.body;
   if (!id || !Array.isArray(messages)) return res.status(400).json({ error: 'Missing fields' });
@@ -2743,7 +2591,7 @@ app.put('/api/conversations/:id', verifyToken, generalLimiter, (req, res) => {
 });
 
 // ── DELETE /api/conversations/:id ─────────────────────────────────────────────
-app.delete('/api/conversations/:id', verifyToken, generalLimiter, (req, res) => {
+app.delete('/api/conversations/:id', verifyToken, (req, res) => {
   db.prepare('DELETE FROM conversations WHERE id = ? AND user_id = ?').run(req.params.id, req.user.id);
   db.prepare('DELETE FROM reactions WHERE conversation_id = ? AND user_id = ?').run(req.params.id, req.user.id);
   db.prepare('DELETE FROM message_media WHERE message_id IN (SELECT id FROM json_each(?)) AND user_id = ?').run(
@@ -2783,7 +2631,7 @@ app.get('/api/projects', verifyToken, (req, res) => {
   res.json(rows.map(mapProjectRow));
 });
 
-app.post('/api/projects', verifyToken, generalLimiter, (req, res) => {
+app.post('/api/projects', verifyToken, (req, res) => {
   const { id, name, color, instructions } = req.body || {};
   if (!id || typeof id !== 'string') return res.status(400).json({ error: 'Missing id' });
   const trimmedName = (typeof name === 'string' ? name.trim() : '') || 'New Project';
@@ -2805,7 +2653,7 @@ app.post('/api/projects', verifyToken, generalLimiter, (req, res) => {
   });
 });
 
-app.put('/api/projects/:id', verifyToken, generalLimiter, (req, res) => {
+app.put('/api/projects/:id', verifyToken, (req, res) => {
   const { id } = req.params;
   const row = db.prepare('SELECT id, name, color, instructions FROM projects WHERE id = ? AND user_id = ?')
     .get(id, req.user.id);
@@ -2828,7 +2676,7 @@ app.put('/api/projects/:id', verifyToken, generalLimiter, (req, res) => {
   });
 });
 
-app.delete('/api/projects/:id', verifyToken, generalLimiter, (req, res) => {
+app.delete('/api/projects/:id', verifyToken, (req, res) => {
   // Explicitly cascade: delete all conversations belonging to this project,
   // then the project itself. (Existing FK was ON DELETE SET NULL.)
   const tx = db.transaction((projectId, userId) => {
@@ -2870,7 +2718,7 @@ app.get('/api/media/:conversationId', verifyToken, (req, res) => {
 });
 
 // ── POST /api/reactions ───────────────────────────────────────────────────────
-app.post('/api/reactions', verifyToken, generalLimiter, (req, res) => {
+app.post('/api/reactions', verifyToken, (req, res) => {
   const { messageId, conversationId, reaction } = req.body;
   if (!messageId || !conversationId || !['up', 'down'].includes(reaction)) {
     return res.status(400).json({ error: 'Invalid reaction' });
@@ -2884,7 +2732,7 @@ app.post('/api/reactions', verifyToken, generalLimiter, (req, res) => {
 });
 
 // ── DELETE /api/reactions/:messageId ─────────────────────────────────────────
-app.delete('/api/reactions/:messageId', verifyToken, generalLimiter, (req, res) => {
+app.delete('/api/reactions/:messageId', verifyToken, (req, res) => {
   db.prepare('DELETE FROM reactions WHERE user_id = ? AND message_id = ?')
     .run(req.user.id, req.params.messageId);
   res.json({ ok: true });
@@ -2896,28 +2744,6 @@ app.get('/api/reactions/:conversationId', verifyToken, (req, res) => {
     'SELECT message_id, reaction FROM reactions WHERE user_id = ? AND conversation_id = ?'
   ).all(req.user.id, req.params.conversationId);
   res.json(rows);
-});
-
-// ── 404 fallback for unknown /api/* routes ───────────────────────────────────
-// Keeps unknown paths from falling through to a default Express handler that
-// could leak framework details.
-app.use('/api', (req, res) => {
-  res.status(404).json({ error: 'Not found' });
-});
-
-// ── Global error handler ──────────────────────────────────────────────────────
-// Prevents stack traces and internal error details from leaking to clients.
-app.use((err, req, res, _next) => {
-  // CORS rejection from the cors middleware surfaces here.
-  if (err && typeof err.message === 'string' && err.message.startsWith('CORS:')) {
-    return res.status(403).json({ error: 'Origin not allowed' });
-  }
-  if (err?.type === 'entity.too.large') {
-    return res.status(413).json({ error: 'Request body too large' });
-  }
-  console.error('[unhandled]', err?.message || err);
-  if (res.headersSent) return;
-  res.status(500).json({ error: 'Internal server error' });
 });
 
 // ── Start ─────────────────────────────────────────────────────────────────────
