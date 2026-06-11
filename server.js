@@ -148,13 +148,43 @@ const googleClient = process.env.GOOGLE_CLIENT_ID
 // ── Rate limiters ─────────────────────────────────────────────────────────────
 const limiterDefaults = { standardHeaders: true, legacyHeaders: false };
 const authLimiter = rateLimit({ ...limiterDefaults, windowMs: 15 * 60 * 1000, max: 10 });
-const chatLimiter = rateLimit({ ...limiterDefaults, windowMs: 60 * 1000, max: 30 });
-// Generous per-IP limit for normal authenticated mutations (write endpoints).
-const generalLimiter = rateLimit({ ...limiterDefaults, windowMs: 60 * 1000, max: 120 });
+// For authenticated routes, key by user id when available so shared IPs
+// (NAT, mobile carriers, offices) don't make legitimate users punish each
+// other, and a single user can't escape the cap by rotating their IP.
+const userOrIpKey = (req) => (req.user?.id ? `u:${req.user.id}` : `ip:${req.ip}`);
+// /api/chat is called multiple times per user message (image-intent classifier
+// + main answer + title/suggestions generator), so a single user prompt
+// already costs ~3 calls. 90/min comfortably allows ~30 prompts/minute while
+// still bounding abuse. skipFailedRequests prevents transient 4xx from eating
+// the quota during normal flows.
+const chatLimiter = rateLimit({
+  ...limiterDefaults,
+  windowMs: 60 * 1000,
+  max: 90,
+  skipFailedRequests: true,
+  keyGenerator: userOrIpKey,
+});
+// Generous per-user/IP limit for normal authenticated mutations (write endpoints).
+const generalLimiter = rateLimit({
+  ...limiterDefaults,
+  windowMs: 60 * 1000,
+  max: 120,
+  keyGenerator: userOrIpKey,
+});
 // Tight limit for sensitive destructive actions (account delete, contact form).
-const sensitiveLimiter = rateLimit({ ...limiterDefaults, windowMs: 60 * 60 * 1000, max: 5 });
+const sensitiveLimiter = rateLimit({
+  ...limiterDefaults,
+  windowMs: 60 * 60 * 1000,
+  max: 5,
+  keyGenerator: userOrIpKey,
+});
 // Cap on image search to keep Pexels usage predictable.
-const imageLimiter = rateLimit({ ...limiterDefaults, windowMs: 60 * 1000, max: 30 });
+const imageLimiter = rateLimit({
+  ...limiterDefaults,
+  windowMs: 60 * 1000,
+  max: 30,
+  keyGenerator: userOrIpKey,
+});
 
 // ── Allowed AI models ─────────────────────────────────────────────────────────
 const ALLOWED_MODELS = new Set([
