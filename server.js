@@ -95,6 +95,17 @@ db.exec(`
     created_at   INTEGER NOT NULL,
     updated_at   INTEGER NOT NULL
   );
+
+  CREATE TABLE IF NOT EXISTS admin_messages (
+    id         INTEGER PRIMARY KEY AUTOINCREMENT,
+    user_id    INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    subject    TEXT    NOT NULL,
+    body       TEXT    NOT NULL,
+    type       TEXT    NOT NULL DEFAULT 'info' CHECK(type IN ('info', 'warning', 'success', 'alert')),
+    is_read    INTEGER NOT NULL DEFAULT 0,
+    created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+    read_at    DATETIME
+  );
 `);
 
 // ── Migrations ────────────────────────────────────────────────────────────────
@@ -113,6 +124,7 @@ try { db.exec("ALTER TABLE conversations ADD COLUMN draft TEXT NOT NULL DEFAULT 
 try { db.exec("ALTER TABLE conversations ADD COLUMN project_id TEXT REFERENCES projects(id) ON DELETE SET NULL"); } catch {}
 try { db.exec("CREATE INDEX IF NOT EXISTS idx_conversations_project ON conversations(user_id, project_id)"); } catch {}
 try { db.exec("CREATE INDEX IF NOT EXISTS idx_projects_user ON projects(user_id, updated_at DESC)"); } catch {}
+try { db.exec("CREATE INDEX IF NOT EXISTS idx_admin_messages_user ON admin_messages(user_id, is_read, created_at DESC)"); } catch {}
 
 // ── Middleware ────────────────────────────────────────────────────────────────
 const ALLOWED_ORIGINS = [
@@ -1453,6 +1465,9 @@ app.get('/admin/dashboard', (req, res) => {
         ${svg(ICONS.thumbUp, 'currentColor', 16)}<span>Feedback</span>
         <span class="nav-badge">${totalReactions}</span>
       </button>
+      <button class="nav-item" data-section="admin-messages" onclick="showSection('admin-messages',this)">
+        ${svg(ICONS.send, 'currentColor', 16)}<span>Send Message</span>
+      </button>
     </nav>
     <button class="logout-btn" onclick="logout()">
       ${svg(ICONS.logout, 'currentColor', 16)}<span>Sign out</span>
@@ -1930,6 +1945,74 @@ app.get('/admin/dashboard', (req, res) => {
         </div>
       </div>
     </section>
+
+    <!-- Admin: Send Direct Message -->
+    <section class="section" id="sec-admin-messages">
+      <div class="page-header">
+        <div>
+          <h2 class="page-title">Send Direct Message</h2>
+          <p class="page-sub">Send notifications and important messages to users</p>
+        </div>
+      </div>
+
+      <div class="panel" style="max-width:600px">
+        <div class="panel-head">
+          <div class="panel-title">Compose message</div>
+        </div>
+        <div class="panel-body">
+          <div style="margin-bottom:18px">
+            <label style="display:block;font-size:11px;font-weight:700;color:var(--muted);text-transform:uppercase;letter-spacing:1.5px;margin-bottom:8px">Recipient</label>
+            <div style="position:relative">
+              <span style="position:absolute;left:12px;top:50%;transform:translateY(-50%);color:var(--muted2);font-size:14px">${svg(ICONS.users, 'currentColor', 14)}</span>
+              <select id="msgUserSelect" style="width:100%;padding:11px 12px 11px 40px;background:var(--card);border:1px solid var(--border);border-radius:10px;color:var(--text);font-size:13px;outline:none;font-family:inherit;transition:all .15s" onchange="onSelectUser()">
+                <option value="">Select a user...</option>
+              </select>
+            </div>
+          </div>
+
+          <div style="margin-bottom:18px">
+            <label style="display:block;font-size:11px;font-weight:700;color:var(--muted);text-transform:uppercase;letter-spacing:1.5px;margin-bottom:8px">Type</label>
+            <div style="display:grid;grid-template-columns:repeat(4,1fr);gap:10px">
+              ${['info', 'warning', 'success', 'alert'].map(t => `
+                <label style="display:flex;align-items:center;gap:8px;padding:10px 12px;background:var(--card);border:2px solid var(--border);border-radius:10px;cursor:pointer;transition:all .15s">
+                  <input type="radio" name="msgType" value="${t}" ${t === 'info' ? 'checked' : ''} style="cursor:pointer;margin:0;width:14px;height:14px">
+                  <span style="font-weight:700;font-size:12px;text-transform:capitalize">${t}</span>
+                </label>
+              `).join('')}
+            </div>
+          </div>
+
+          <div style="margin-bottom:18px">
+            <label style="display:block;font-size:11px;font-weight:700;color:var(--muted);text-transform:uppercase;letter-spacing:1.5px;margin-bottom:8px">Subject</label>
+            <input id="msgSubject" type="text" placeholder="Message subject..." maxlength="100" style="width:100%;padding:11px 12px;background:var(--card);border:1px solid var(--border);border-radius:10px;color:var(--text);font-size:13px;outline:none;font-family:inherit;transition:all .15s">
+          </div>
+
+          <div style="margin-bottom:18px">
+            <label style="display:block;font-size:11px;font-weight:700;color:var(--muted);text-transform:uppercase;letter-spacing:1.5px;margin-bottom:8px">Message</label>
+            <textarea id="msgBody" placeholder="Write your message..." maxlength="1000" style="width:100%;padding:11px 12px;background:var(--card);border:1px solid var(--border);border-radius:10px;color:var(--text);font-size:13px;outline:none;font-family:inherit;resize:vertical;min-height:120px;transition:all .15s"></textarea>
+            <div style="color:var(--muted2);font-size:11px;margin-top:6px;text-align:right"><span id="charCount">0</span>/1000</div>
+          </div>
+
+          <div style="display:flex;gap:10px">
+            <button onclick="clearMessageForm()" style="flex:1;padding:11px;border:1px solid var(--border);background:transparent;color:var(--muted);border-radius:10px;font-size:12px;font-weight:700;cursor:pointer;transition:all .15s;font-family:inherit;text-transform:uppercase;letter-spacing:.5px">Cancel</button>
+            <button id="sendMsgBtn" onclick="sendDirectMessage()" style="flex:1;padding:11px;border:none;background:linear-gradient(135deg,#3b82f6,#1d4ed8);color:#fff;border-radius:10px;font-size:12px;font-weight:700;cursor:pointer;transition:all .15s;font-family:inherit;text-transform:uppercase;letter-spacing:.5px;display:flex;align-items:center;justify-content:center;gap:8px" disabled>
+              ${svg(ICONS.send, '#fff', 13)} <span>Send Message</span>
+            </button>
+          </div>
+        </div>
+      </div>
+
+      <!-- Sent messages history -->
+      <div class="panel" style="margin-top:20px">
+        <div class="panel-head">
+          <div class="panel-title">Recent sent messages</div>
+          <button class="panel-action" onclick="refreshSentMessages()">Refresh</button>
+        </div>
+        <div class="panel-body" id="sentMessagesContainer">
+          <div class="empty-inline"><p>Send a message to get started</p></div>
+        </div>
+      </div>
+    </section>
   </main>
 </div>
 
@@ -2103,6 +2186,89 @@ app.get('/admin/dashboard', (req, res) => {
     fetch('/admin/logout', { method:'POST', credentials:'include' })
       .then(()=>location.href='/admin');
   }
+  
+  // ──────────────────────────────────────────────────────────────────────────
+  // Admin Direct Messages
+  let _allUsers = [];
+  async function loadAdminMessageUsers(){
+    try{
+      const r = await fetch('/admin/message/users', { credentials:'include' });
+      if(!r.ok) throw new Error('Failed to load users');
+      _allUsers = await r.json();
+      const sel = document.getElementById('msgUserSelect');
+      if(!sel) return;
+      sel.innerHTML = '<option value="">Select a user...</option>' + _allUsers.map(u => 
+        \`<option value="\${u.id}">\${escapeHtml(u.name)} · \${escapeHtml(u.email)}</option>\`
+      ).join('');
+    }catch(e){
+      showToast('Failed to load users: ' + e.message, false);
+    }
+  }
+  function onSelectUser(){
+    updateSendButtonState();
+  }
+  function updateSendButtonState(){
+    const uid = document.getElementById('msgUserSelect')?.value;
+    const subj = document.getElementById('msgSubject')?.value?.trim();
+    const body = document.getElementById('msgBody')?.value?.trim();
+    const btn = document.getElementById('sendMsgBtn');
+    if(btn) btn.disabled = !uid || !subj || !body;
+  }
+  function clearMessageForm(){
+    document.getElementById('msgUserSelect').value = '';
+    document.getElementById('msgSubject').value = '';
+    document.getElementById('msgBody').value = '';
+    document.querySelectorAll('input[name="msgType"]').forEach(r => { if(r.value === 'info') r.checked = true; });
+    document.getElementById('charCount').textContent = '0';
+    updateSendButtonState();
+  }
+  async function sendDirectMessage(){
+    const uid = document.getElementById('msgUserSelect').value;
+    const subj = document.getElementById('msgSubject').value.trim();
+    const body = document.getElementById('msgBody').value.trim();
+    const type = document.querySelector('input[name="msgType"]:checked').value;
+    if(!uid || !subj || !body) { showToast('Fill all fields', false); return; }
+    const btn = document.getElementById('sendMsgBtn');
+    btn.disabled = true;
+    const origText = btn.querySelector('span').textContent;
+    btn.querySelector('span').textContent = 'Sending...';
+    try{
+      const r = await fetch('/admin/message/send', {
+        method:'POST',
+        headers:{'Content-Type':'application/json'},
+        credentials:'include',
+        body: JSON.stringify({ user_id: parseInt(uid), subject: subj, body, type })
+      });
+      const d = await r.json();
+      if(!r.ok) throw new Error(d.error || 'Send failed');
+      showToast('Message sent successfully!', true);
+      clearMessageForm();
+      refreshSentMessages();
+    }catch(e){
+      showToast('Error: ' + e.message, false);
+    }finally{
+      btn.disabled = false;
+      btn.querySelector('span').textContent = origText;
+    }
+  }
+  async function refreshSentMessages(){
+    // Placeholder: in a real app, fetch recent messages sent by admin
+    const container = document.getElementById('sentMessagesContainer');
+    if(!container) return;
+    container.innerHTML = '<div class="empty-inline"><p>Send a message to get started</p></div>';
+  }
+  // Initialize on page load
+  document.addEventListener('DOMContentLoaded', () => {
+    const subject = document.getElementById('msgSubject');
+    const body = document.getElementById('msgBody');
+    if(subject) subject.addEventListener('input', updateSendButtonState);
+    if(body) body.addEventListener('input', e => {
+      document.getElementById('charCount').textContent = e.target.value.length;
+      updateSendButtonState();
+    });
+    loadAdminMessageUsers();
+  });
+
   async function cleanupOrphans(count){
     const ok = await showConfirm({
       variant:'warn', icon:'alert',
@@ -2521,6 +2687,97 @@ app.get('/admin/conversations/:id/messages', requireAdmin, (req, res) => {
       messages: messages.map(m => ({ role: m.role, content: m.content, timestamp: m.timestamp })),
     });
   } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// ── POST /admin/message/send ──────────────────────────────────────────────────
+// Send a direct message to a user
+app.post('/admin/message/send', requireAdmin, (req, res) => {
+  const { user_id, subject, body, type } = req.body;
+  if (!user_id || !subject || !body) {
+    return res.status(400).json({ error: 'Missing required fields: user_id, subject, body' });
+  }
+  const validTypes = ['info', 'warning', 'success', 'alert'];
+  const msgType = validTypes.includes(type) ? type : 'info';
+  try {
+    const user = db.prepare('SELECT id, name, email FROM users WHERE id = ?').get(user_id);
+    if (!user) return res.status(404).json({ error: 'User not found' });
+    const result = db.prepare(`
+      INSERT INTO admin_messages (user_id, subject, body, type)
+      VALUES (?, ?, ?, ?)
+    `).run(user_id, subject, body, msgType);
+    console.log(`📨 Admin sent message to ${user.email} (id=${result.lastInsertRowid})`);
+    res.json({ ok: true, id: result.lastInsertRowid });
+  } catch (err) {
+    console.error('Admin message send error:', err.message);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// ── GET /admin/message/users ──────────────────────────────────────────────────
+// Get list of users for admin message selector
+app.get('/admin/message/users', requireAdmin, (req, res) => {
+  try {
+    const users = db.prepare(`
+      SELECT id, name, email, country, created_at
+      FROM users
+      WHERE suspended = 0
+      ORDER BY name ASC
+    `).all();
+    res.json(users);
+  } catch (err) {
+    console.error('Admin message users error:', err.message);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// ── GET /api/user/messages ────────────────────────────────────────────────────
+// Get all messages for logged-in user
+app.get('/api/user/messages', verifyToken, (req, res) => {
+  try {
+    const messages = db.prepare(`
+      SELECT id, subject, body, type, is_read, created_at, read_at
+      FROM admin_messages
+      WHERE user_id = ?
+      ORDER BY created_at DESC
+    `).all(req.user.id);
+    const unreadCount = messages.filter(m => !m.is_read).length;
+    res.json({
+      messages: messages.map(m => ({
+        id: m.id,
+        subject: m.subject,
+        body: m.body,
+        type: m.type,
+        isRead: !!m.is_read,
+        createdAt: m.created_at,
+        readAt: m.read_at,
+      })),
+      unreadCount,
+    });
+  } catch (err) {
+    console.error('GET /api/user/messages error:', err.message);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// ── POST /api/user/messages/:id/read ──────────────────────────────────────────
+// Mark a message as read
+app.post('/api/user/messages/:id/read', verifyToken, (req, res) => {
+  const { id } = req.params;
+  if (!id) return res.status(400).json({ error: 'Invalid message id' });
+  try {
+    const msg = db.prepare('SELECT user_id FROM admin_messages WHERE id = ?').get(id);
+    if (!msg) return res.status(404).json({ error: 'Message not found' });
+    if (msg.user_id !== req.user.id) return res.status(403).json({ error: 'Forbidden' });
+    db.prepare(`
+      UPDATE admin_messages
+      SET is_read = 1, read_at = CURRENT_TIMESTAMP
+      WHERE id = ?
+    `).run(id);
+    res.json({ ok: true });
+  } catch (err) {
+    console.error('POST /api/user/messages/:id/read error:', err.message);
     res.status(500).json({ error: err.message });
   }
 });
