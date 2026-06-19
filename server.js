@@ -2369,19 +2369,25 @@ app.get('/admin/dashboard', (req, res) => {
         container.innerHTML = '<div class="empty-inline"><p>No messages sent yet</p></div>';
         return;
       }
-      container.innerHTML = msgs.map(m => `
-        <div class="sent-msg-item">
-          <div class="sent-msg-row">
-            <span class="sent-msg-type ${m.type}">${m.type}</span>
-            <span class="sent-msg-to">${escapeHtmlClient(m.user_name)} &lt;${escapeHtmlClient(m.user_email)}&gt;</span>
-            <span class="sent-msg-date">${new Date(m.created_at).toLocaleDateString(undefined,{month:'short',day:'numeric',hour:'2-digit',minute:'2-digit'})}</span>
-            <span class="sent-msg-read ${m.is_read?'read':'unread'}">${m.is_read?'\u2713 Read':'\u25cf Unread'}</span>
-          </div>
-          <div class="sent-msg-subject">${escapeHtmlClient(m.subject)}</div>
-          <div class="sent-msg-body">${escapeHtmlClient(m.body)}</div>
-          ${m.user_reply ? `<div class="sent-msg-reply"><span class="sent-msg-reply-label">User replied</span>${escapeHtmlClient(m.user_reply)}</div>` : ''}
-        </div>
-      `).join('');
+      container.innerHTML = msgs.map(m => {
+        const replyHtml = m.user_reply
+          ? '<div class="sent-msg-reply"><span class="sent-msg-reply-label">User replied</span>' + escapeHtmlClient(m.user_reply) + '</div>'
+          : '';
+        const readClass = m.is_read ? 'read' : 'unread';
+        const readLabel = m.is_read ? '\u2713 Read' : '\u25cf Unread';
+        const dateStr = new Date(m.created_at).toLocaleDateString(undefined, {month:'short',day:'numeric',hour:'2-digit',minute:'2-digit'});
+        return '<div class="sent-msg-item">'
+          + '<div class="sent-msg-row">'
+          + '<span class="sent-msg-type ' + m.type + '">' + m.type + '</span>'
+          + '<span class="sent-msg-to">' + escapeHtmlClient(m.user_name) + ' &lt;' + escapeHtmlClient(m.user_email) + '&gt;</span>'
+          + '<span class="sent-msg-date">' + dateStr + '</span>'
+          + '<span class="sent-msg-read ' + readClass + '">' + readLabel + '</span>'
+          + '</div>'
+          + '<div class="sent-msg-subject">' + escapeHtmlClient(m.subject) + '</div>'
+          + '<div class="sent-msg-body">' + escapeHtmlClient(m.body) + '</div>'
+          + replyHtml
+          + '</div>';
+      }).join('');
     }catch(e){
       container.innerHTML = '<div class="empty-inline"><p>Failed to load messages</p></div>';
     }
