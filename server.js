@@ -761,6 +761,12 @@ app.get('/admin/dashboard', (req, res) => {
   const dualUsers   = users.filter(u => u.google_id && hasRealPw(u)).length;
   const googleTotal = users.filter(u => u.google_id).length;
   const suspendedCount = users.filter(u => u.suspended).length;
+  const activeAdminMessageUsers = users.filter(u => !u.suspended);
+  const adminMessageUserOptions = activeAdminMessageUsers.length
+    ? activeAdminMessageUsers.map(u => `
+        <option value="${u.id}" data-name="${escapeHtml(u.name)}" data-email="${escapeHtml(u.email)}">${escapeHtml(u.name)} · ${escapeHtml(u.email)}</option>
+      `).join('')
+    : '<option value="">No active users found</option>';
   const totalConvs = allConvs.length;
   const totalMsgsInConvs = allConvs.reduce((s, c) => s + (c.message_count || 0), 0);
   const repliedCount = contacts.filter(c => c.admin_reply && c.admin_reply.trim()).length;
@@ -1099,6 +1105,33 @@ app.get('/admin/dashboard', (req, res) => {
   .panel-action:hover{border-color:var(--primary);color:var(--primary)}
   .panel-body{padding:16px 20px}
   .panel-note{color:var(--muted2);font-size:11px;margin-top:10px;padding-top:10px;border-top:1px dashed var(--border-soft);font-style:italic}
+  /* Admin direct message form */
+  .admin-msg-wrap{width:100%}
+  .admin-msg-stack{display:grid;gap:16px}
+  .admin-msg-field{display:grid;gap:7px}
+  .admin-msg-label{display:block;font-size:11px;font-weight:700;color:var(--muted);text-transform:uppercase;letter-spacing:1.3px}
+  .admin-msg-input-wrap{position:relative}
+  .admin-msg-icon{position:absolute;left:12px;top:50%;transform:translateY(-50%);color:var(--muted2);display:inline-flex;pointer-events:none}
+  .admin-msg-input,.admin-msg-select,.admin-msg-textarea{width:100%;padding:11px 12px;background:#0f0f0f;border:1px solid var(--border-soft);border-radius:10px;color:var(--text);font-size:13px;outline:none;font-family:inherit;transition:border-color .15s, box-shadow .15s, background .15s}
+  .admin-msg-select{padding-left:40px;appearance:none}
+  .admin-msg-textarea{resize:vertical;min-height:120px}
+  .admin-msg-input:hover,.admin-msg-select:hover,.admin-msg-textarea:hover{background:#121212;border-color:var(--border)}
+  .admin-msg-input:focus,.admin-msg-select:focus,.admin-msg-textarea:focus{border-color:var(--primary);box-shadow:0 0 0 3px rgba(227,30,36,.14);background:#121212}
+  .admin-msg-type-grid{display:grid;grid-template-columns:repeat(4, minmax(0,1fr));gap:10px}
+  .admin-msg-type{display:flex;align-items:center;gap:8px;padding:10px 12px;background:#0f0f0f;border:1px solid var(--border-soft);border-radius:10px;cursor:pointer;transition:all .15s;font-size:12px;font-weight:700;text-transform:capitalize;color:var(--text)}
+  .admin-msg-type:hover{border-color:var(--border);background:#121212}
+  .admin-msg-type input{margin:0;cursor:pointer}
+  .admin-msg-type:has(input:checked){border-color:var(--primary);background:rgba(227,30,36,.08);box-shadow:inset 0 0 0 1px rgba(227,30,36,.2)}
+  .admin-msg-count{color:var(--muted2);font-size:11px;text-align:right}
+  .admin-msg-actions{display:flex;gap:10px}
+  .admin-msg-btn{flex:1;padding:11px;border-radius:10px;font-size:12px;font-weight:700;cursor:pointer;transition:all .15s;font-family:inherit;display:inline-flex;align-items:center;justify-content:center;gap:8px}
+  .admin-msg-btn-secondary{border:1px solid var(--border);background:transparent;color:var(--muted)}
+  .admin-msg-btn-secondary:hover{border-color:#3a3a3a;color:var(--text);background:rgba(255,255,255,.02)}
+  .admin-msg-btn-primary{border:none;background:linear-gradient(135deg,var(--primary),#8b1217);color:#fff}
+  .admin-msg-btn-primary:hover:not(:disabled){filter:brightness(1.07)}
+  .admin-msg-btn-primary:disabled{opacity:.55;cursor:not-allowed}
+  .admin-msg-history{margin-top:20px}
+  .admin-msg-help{color:var(--muted2);font-size:11px;margin-top:2px}
   /* Breakdown rows */
   .bd-row{display:grid;grid-template-columns:140px 1fr auto;gap:12px;align-items:center;padding:10px 0}
   .bd-row + .bd-row{border-top:1px solid var(--border-soft)}
@@ -1420,9 +1453,12 @@ app.get('/admin/dashboard', (req, res) => {
     .fb-conv-stats{width:100%;justify-content:flex-start;margin-top:4px}
     .fb-recent-row{flex-wrap:wrap;gap:8px}
     .fb-recent-badge{margin-left:auto}
+    .admin-msg-type-grid{grid-template-columns:repeat(2, minmax(0,1fr))}
   }
   @media(max-width:480px){
     .stats-grid{grid-template-columns:1fr}
+    .admin-msg-actions{flex-direction:column}
+    .admin-msg-type-grid{grid-template-columns:1fr}
     .hero{padding:16px;gap:14px}
     .hero-title{font-size:19px}
     .kpi-value{font-size:28px}
@@ -1955,47 +1991,49 @@ app.get('/admin/dashboard', (req, res) => {
         </div>
       </div>
 
-      <div class="panel" style="max-width:600px">
+      <div class="panel admin-msg-wrap">
         <div class="panel-head">
           <div class="panel-title">Compose message</div>
         </div>
-        <div class="panel-body">
-          <div style="margin-bottom:18px">
-            <label style="display:block;font-size:11px;font-weight:700;color:var(--muted);text-transform:uppercase;letter-spacing:1.5px;margin-bottom:8px">Recipient</label>
-            <div style="position:relative">
-              <span style="position:absolute;left:12px;top:50%;transform:translateY(-50%);color:var(--muted2);font-size:14px">${svg(ICONS.users, 'currentColor', 14)}</span>
-              <select id="msgUserSelect" style="width:100%;padding:11px 12px 11px 40px;background:var(--card);border:1px solid var(--border);border-radius:10px;color:var(--text);font-size:13px;outline:none;font-family:inherit;transition:all .15s" onchange="onSelectUser()">
+        <div class="panel-body admin-msg-stack">
+          <div class="admin-msg-field">
+            <label class="admin-msg-label">Recipient</label>
+            <div class="admin-msg-input-wrap">
+              <span class="admin-msg-icon">${svg(ICONS.users, 'currentColor', 14)}</span>
+              <select id="msgUserSelect" class="admin-msg-select" onchange="onSelectUser()" onfocus="ensureAdminMessageUsersLoaded()" onmousedown="ensureAdminMessageUsersLoaded()">
                 <option value="">Select a user...</option>
+                ${adminMessageUserOptions}
               </select>
             </div>
+            <div class="admin-msg-help" id="msgUserHelp">Active users appear here automatically when the section opens.</div>
           </div>
 
-          <div style="margin-bottom:18px">
-            <label style="display:block;font-size:11px;font-weight:700;color:var(--muted);text-transform:uppercase;letter-spacing:1.5px;margin-bottom:8px">Type</label>
-            <div style="display:grid;grid-template-columns:repeat(4,1fr);gap:10px">
+          <div class="admin-msg-field">
+            <label class="admin-msg-label">Type</label>
+            <div class="admin-msg-type-grid">
               ${['info', 'warning', 'success', 'alert'].map(t => `
-                <label style="display:flex;align-items:center;gap:8px;padding:10px 12px;background:var(--card);border:2px solid var(--border);border-radius:10px;cursor:pointer;transition:all .15s">
-                  <input type="radio" name="msgType" value="${t}" ${t === 'info' ? 'checked' : ''} style="cursor:pointer;margin:0;width:14px;height:14px">
-                  <span style="font-weight:700;font-size:12px;text-transform:capitalize">${t}</span>
+                <label class="admin-msg-type">
+                  <input type="radio" name="msgType" value="${t}" ${t === 'info' ? 'checked' : ''}>
+                  <span>${t}</span>
                 </label>
               `).join('')}
             </div>
           </div>
 
-          <div style="margin-bottom:18px">
-            <label style="display:block;font-size:11px;font-weight:700;color:var(--muted);text-transform:uppercase;letter-spacing:1.5px;margin-bottom:8px">Subject</label>
-            <input id="msgSubject" type="text" placeholder="Message subject..." maxlength="100" style="width:100%;padding:11px 12px;background:var(--card);border:1px solid var(--border);border-radius:10px;color:var(--text);font-size:13px;outline:none;font-family:inherit;transition:all .15s">
+          <div class="admin-msg-field">
+            <label class="admin-msg-label">Subject</label>
+            <input id="msgSubject" type="text" placeholder="Message subject..." maxlength="100" class="admin-msg-input">
           </div>
 
-          <div style="margin-bottom:18px">
-            <label style="display:block;font-size:11px;font-weight:700;color:var(--muted);text-transform:uppercase;letter-spacing:1.5px;margin-bottom:8px">Message</label>
-            <textarea id="msgBody" placeholder="Write your message..." maxlength="1000" style="width:100%;padding:11px 12px;background:var(--card);border:1px solid var(--border);border-radius:10px;color:var(--text);font-size:13px;outline:none;font-family:inherit;resize:vertical;min-height:120px;transition:all .15s"></textarea>
-            <div style="color:var(--muted2);font-size:11px;margin-top:6px;text-align:right"><span id="charCount">0</span>/1000</div>
+          <div class="admin-msg-field">
+            <label class="admin-msg-label">Message</label>
+            <textarea id="msgBody" placeholder="Write your message..." maxlength="1000" class="admin-msg-textarea"></textarea>
+            <div class="admin-msg-count"><span id="charCount">0</span>/1000</div>
           </div>
 
-          <div style="display:flex;gap:10px">
-            <button onclick="clearMessageForm()" style="flex:1;padding:11px;border:1px solid var(--border);background:transparent;color:var(--muted);border-radius:10px;font-size:12px;font-weight:700;cursor:pointer;transition:all .15s;font-family:inherit;text-transform:uppercase;letter-spacing:.5px">Cancel</button>
-            <button id="sendMsgBtn" onclick="sendDirectMessage()" style="flex:1;padding:11px;border:none;background:linear-gradient(135deg,#3b82f6,#1d4ed8);color:#fff;border-radius:10px;font-size:12px;font-weight:700;cursor:pointer;transition:all .15s;font-family:inherit;text-transform:uppercase;letter-spacing:.5px;display:flex;align-items:center;justify-content:center;gap:8px" disabled>
+          <div class="admin-msg-actions">
+            <button onclick="clearMessageForm()" class="admin-msg-btn admin-msg-btn-secondary">Cancel</button>
+            <button id="sendMsgBtn" onclick="sendDirectMessage()" class="admin-msg-btn admin-msg-btn-primary" disabled>
               ${svg(ICONS.send, '#fff', 13)} <span>Send Message</span>
             </button>
           </div>
@@ -2003,7 +2041,7 @@ app.get('/admin/dashboard', (req, res) => {
       </div>
 
       <!-- Sent messages history -->
-      <div class="panel" style="margin-top:20px">
+      <div class="panel admin-msg-history">
         <div class="panel-head">
           <div class="panel-title">Recent sent messages</div>
           <button class="panel-action" onclick="refreshSentMessages()">Refresh</button>
@@ -2080,6 +2118,7 @@ app.get('/admin/dashboard', (req, res) => {
     document.querySelectorAll('.nav-item').forEach(b=>b.classList.remove('active'));
     btn.classList.add('active');
     sessionStorage.setItem('admin_section', id);
+    if(id === 'admin-messages') ensureAdminMessageUsersLoaded(false);
   }
   // Restore last active section on load
   (function(){
@@ -2190,19 +2229,67 @@ app.get('/admin/dashboard', (req, res) => {
   // ──────────────────────────────────────────────────────────────────────────
   // Admin Direct Messages
   let _allUsers = [];
-  async function loadAdminMessageUsers(){
+  let _loadingAdminUsers = false;
+  function escapeHtmlClient(str){
+    return String(str ?? '')
+      .replace(/&/g, '&amp;')
+      .replace(/</g, '&lt;')
+      .replace(/>/g, '&gt;')
+      .replace(/"/g, '&quot;')
+      .replace(/'/g, '&#039;');
+  }
+  function setAdminUsersState(message, options){
+    const sel = document.getElementById('msgUserSelect');
+    const help = document.getElementById('msgUserHelp');
+    if(sel) sel.innerHTML = '<option value="">' + escapeHtmlClient(message) + '</option>';
+    if(help && options?.helpText) help.textContent = options.helpText;
+  }
+  function hydrateAdminUsersFromSelect(){
+    if(_allUsers.length) return;
+    const sel = document.getElementById('msgUserSelect');
+    if(!sel || sel.options.length <= 1) return;
+    const users = Array.from(sel.options)
+      .filter(opt => opt.value)
+      .map(opt => ({
+        id: parseInt(opt.value, 10),
+        name: opt.dataset.name || opt.textContent.split('·')[0].trim(),
+        email: opt.dataset.email || opt.textContent.split('·').slice(1).join('·').trim(),
+      }))
+      .filter(u => Number.isFinite(u.id) && u.name && u.email);
+    if(users.length) _allUsers = users;
+  }
+  async function loadAdminMessageUsers(forceReload){
+    hydrateAdminUsersFromSelect();
+    if(_loadingAdminUsers) return;
+    if(!forceReload && _allUsers.length) return;
+    _loadingAdminUsers = true;
+    setAdminUsersState('Loading users...', { helpText: 'Fetching active users from the application...' });
     try{
       const r = await fetch('/admin/message/users', { credentials:'include' });
       if(!r.ok) throw new Error('Failed to load users');
       _allUsers = await r.json();
       const sel = document.getElementById('msgUserSelect');
+      const help = document.getElementById('msgUserHelp');
       if(!sel) return;
+      if(!_allUsers.length){
+        sel.innerHTML = '<option value="">No active users found</option>';
+        if(help) help.textContent = 'There are currently no active users to message.';
+        return;
+      }
       sel.innerHTML = '<option value="">Select a user...</option>' + _allUsers.map(u => 
-        \`<option value="\${u.id}">\${escapeHtml(u.name)} · \${escapeHtml(u.email)}</option>\`
+        \`<option value="\${u.id}">\${escapeHtmlClient(u.name)} · \${escapeHtmlClient(u.email)}</option>\`
       ).join('');
+      if(help) help.textContent = _allUsers.length + ' active user' + (_allUsers.length === 1 ? '' : 's') + ' available.';
     }catch(e){
+      _allUsers = [];
+      setAdminUsersState('Unable to load users', { helpText: 'Loading failed. Click the dropdown again after checking the admin session.' });
       showToast('Failed to load users: ' + e.message, false);
+    }finally{
+      _loadingAdminUsers = false;
     }
+  }
+  function ensureAdminMessageUsersLoaded(forceReload){
+    loadAdminMessageUsers(!!forceReload);
   }
   function onSelectUser(){
     updateSendButtonState();
@@ -2261,12 +2348,18 @@ app.get('/admin/dashboard', (req, res) => {
   document.addEventListener('DOMContentLoaded', () => {
     const subject = document.getElementById('msgSubject');
     const body = document.getElementById('msgBody');
+    const userSelect = document.getElementById('msgUserSelect');
     if(subject) subject.addEventListener('input', updateSendButtonState);
     if(body) body.addEventListener('input', e => {
       document.getElementById('charCount').textContent = e.target.value.length;
       updateSendButtonState();
     });
-    loadAdminMessageUsers();
+    if(userSelect){
+      userSelect.addEventListener('focus', () => ensureAdminMessageUsersLoaded(false));
+      userSelect.addEventListener('mousedown', () => ensureAdminMessageUsersLoaded(false));
+    }
+    hydrateAdminUsersFromSelect();
+    if(!_allUsers.length) loadAdminMessageUsers(false);
   });
 
   async function cleanupOrphans(count){
