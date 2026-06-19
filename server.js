@@ -11,6 +11,7 @@ const crypto = require('crypto');
 const { Readable } = require('stream');
 const rateLimit = require('express-rate-limit');
 const { OAuth2Client } = require('google-auth-library');
+const webPush = require('web-push');
 
 require('dotenv').config({ path: path.join(__dirname, '.env') });
 
@@ -127,6 +128,40 @@ try { db.exec("CREATE INDEX IF NOT EXISTS idx_projects_user ON projects(user_id,
 try { db.exec("CREATE INDEX IF NOT EXISTS idx_admin_messages_user ON admin_messages(user_id, is_read, created_at DESC)"); } catch {}
 try { db.exec("ALTER TABLE admin_messages ADD COLUMN user_reply TEXT"); } catch {}
 try { db.exec("ALTER TABLE admin_messages ADD COLUMN user_replied_at DATETIME"); } catch {}
+try { db.exec(`CREATE TABLE IF NOT EXISTS push_subscriptions (
+  id      INTEGER PRIMARY KEY AUTOINCREMENT,
+  user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  endpoint TEXT NOT NULL,
+  p256dh  TEXT NOT NULL,
+  auth    TEXT NOT NULL,
+  UNIQUE(user_id, endpoint)
+)`); } catch {}
+
+// ── Web Push (VAPID) setup ────────────────────────────────────────────────────
+if (process.env.VAPID_PUBLIC_KEY && process.env.VAPID_PRIVATE_KEY) {
+  webPush.setVapidDetails(
+    'mailto:support@runner-code.com',
+    process.env.VAPID_PUBLIC_KEY,
+    process.env.VAPID_PRIVATE_KEY
+  );
+}
+
+/** Send a push notification to all subscriptions of a user (fire-and-forget). */
+async function sendPushToUser(userId, payload) {
+  if (!process.env.VAPID_PUBLIC_KEY || !process.env.VAPID_PRIVATE_KEY) return;
+  const subs = db.prepare('SELECT endpoint, p256dh, auth FROM push_subscriptions WHERE user_id = ?').all(userId);
+  const data = JSON.stringify(payload);
+  for (const sub of subs) {
+    try {
+      await webPush.sendNotification({ endpoint: sub.endpoint, keys: { p256dh: sub.p256dh, auth: sub.auth } }, data);
+    } catch (err) {
+      // Subscription expired or invalid — remove it
+      if (err.statusCode === 410 || err.statusCode === 404) {
+        db.prepare('DELETE FROM push_subscriptions WHERE endpoint = ?').run(sub.endpoint);
+      }
+    }
+  }
+}
 
 // ── Middleware ────────────────────────────────────────────────────────────────
 const ALLOWED_ORIGINS = [
@@ -2775,6 +2810,15 @@ app.post('/admin/contact/:id/reply', requireAdmin, (req, res) => {
   db.prepare('UPDATE contact_messages SET admin_reply = ?, replied_at = CURRENT_TIMESTAMP, seen_at = NULL WHERE id = ?')
     .run(reply.trim().slice(0, 3000), id);
   console.log(`💬 Admin replied to contact message #${id}`);
+  // Push notification to the user who sent the report
+  const contact = db.prepare('SELECT user_id, subject FROM contact_messages WHERE id = ?').get(id);
+  if (contact?.user_id) {
+    sendPushToUser(contact.user_id, {
+      title: '💬 Runner Code replied to your report',
+      body: contact.subject || 'You have a new reply',
+      url: '/support',
+    });
+  }
   res.json({ ok: true });
 });
 
@@ -2852,6 +2896,12 @@ app.post('/admin/message/send', requireAdmin, (req, res) => {
       VALUES (?, ?, ?, ?)
     `).run(user_id, subject, body, msgType);
     console.log(`📨 Admin sent message to ${user.email} (id=${result.lastInsertRowid})`);
+    // Push notification
+    sendPushToUser(user_id, {
+      title: '📬 New message from Runner Code',
+      body: subject,
+      url: '/messages',
+    });
     res.json({ ok: true, id: result.lastInsertRowid });
   } catch (err) {
     console.error('Admin message send error:', err.message);
@@ -3078,6 +3128,36 @@ app.delete('/api/conversations/:id', verifyToken, (req, res) => {
         WHERE conversations.user_id = ?
       )
   `).run(req.user.id, req.user.id);
+  res.json({ ok: true });
+});
+
+// ── GET /api/push/vapid-public-key ────────────────────────────────────────────
+app.get('/api/push/vapid-public-key', (req, res) => {
+  res.json({ key: process.env.VAPID_PUBLIC_KEY || null });
+});
+
+// ── POST /api/push/subscribe ──────────────────────────────────────────────────
+app.post('/api/push/subscribe', verifyToken, (req, res) => {
+  const { endpoint, keys } = req.body;
+  if (!endpoint || !keys?.p256dh || !keys?.auth) {
+    return res.status(400).json({ error: 'Invalid subscription' });
+  }
+  db.prepare(`
+    INSERT INTO push_subscriptions (user_id, endpoint, p256dh, auth)
+    VALUES (?, ?, ?, ?)
+    ON CONFLICT(user_id, endpoint) DO UPDATE SET p256dh = excluded.p256dh, auth = excluded.auth
+  `).run(req.user.id, endpoint, keys.p256dh, keys.auth);
+  res.json({ ok: true });
+});
+
+// ── DELETE /api/push/unsubscribe ─────────────────────────────────────────────
+app.delete('/api/push/unsubscribe', verifyToken, (req, res) => {
+  const { endpoint } = req.body;
+  if (endpoint) {
+    db.prepare('DELETE FROM push_subscriptions WHERE user_id = ? AND endpoint = ?').run(req.user.id, endpoint);
+  } else {
+    db.prepare('DELETE FROM push_subscriptions WHERE user_id = ?').run(req.user.id);
+  }
   res.json({ ok: true });
 });
 
