@@ -125,6 +125,8 @@ try { db.exec("ALTER TABLE conversations ADD COLUMN project_id TEXT REFERENCES p
 try { db.exec("CREATE INDEX IF NOT EXISTS idx_conversations_project ON conversations(user_id, project_id)"); } catch {}
 try { db.exec("CREATE INDEX IF NOT EXISTS idx_projects_user ON projects(user_id, updated_at DESC)"); } catch {}
 try { db.exec("CREATE INDEX IF NOT EXISTS idx_admin_messages_user ON admin_messages(user_id, is_read, created_at DESC)"); } catch {}
+try { db.exec("ALTER TABLE admin_messages ADD COLUMN user_reply TEXT"); } catch {}
+try { db.exec("ALTER TABLE admin_messages ADD COLUMN user_replied_at DATETIME"); } catch {}
 
 // ── Middleware ────────────────────────────────────────────────────────────────
 const ALLOWED_ORIGINS = [
@@ -1131,6 +1133,23 @@ app.get('/admin/dashboard', (req, res) => {
   .admin-msg-btn-primary:hover:not(:disabled){filter:brightness(1.07)}
   .admin-msg-btn-primary:disabled{opacity:.55;cursor:not-allowed}
   .admin-msg-history{margin-top:20px}
+  .sent-msg-item{padding:14px 0;border-bottom:1px solid var(--border-soft)}
+  .sent-msg-item:last-child{border-bottom:none}
+  .sent-msg-row{display:flex;align-items:center;gap:8px;flex-wrap:wrap;margin-bottom:6px}
+  .sent-msg-type{font-size:10px;font-weight:700;text-transform:uppercase;letter-spacing:1px;padding:2px 8px;border-radius:6px}
+  .sent-msg-type.info{color:#60a5fa;background:rgba(96,165,250,.12)}
+  .sent-msg-type.warning{color:#fbbf24;background:rgba(251,191,36,.12)}
+  .sent-msg-type.success{color:#34d399;background:rgba(52,211,153,.12)}
+  .sent-msg-type.alert{color:#f87171;background:rgba(248,113,113,.12)}
+  .sent-msg-to{font-size:12px;color:var(--text);font-weight:600;flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+  .sent-msg-date{font-size:11px;color:var(--muted2);white-space:nowrap}
+  .sent-msg-read{font-size:10px;font-weight:700;white-space:nowrap}
+  .sent-msg-read.read{color:#34d399}
+  .sent-msg-read.unread{color:#f87171}
+  .sent-msg-subject{font-size:13px;font-weight:600;color:var(--text);margin-bottom:4px}
+  .sent-msg-body{font-size:12px;color:var(--muted);line-height:1.5}
+  .sent-msg-reply{margin-top:8px;padding:8px 12px;background:rgba(255,255,255,.03);border-left:3px solid var(--primary);border-radius:0 8px 8px 0}
+  .sent-msg-reply-label{font-size:10px;font-weight:700;color:var(--primary);text-transform:uppercase;letter-spacing:.8px;display:block;margin-bottom:3px}
   .admin-msg-help{color:var(--muted2);font-size:11px;margin-top:2px}
   /* Breakdown rows */
   .bd-row{display:grid;grid-template-columns:140px 1fr auto;gap:12px;align-items:center;padding:10px 0}
@@ -2118,7 +2137,7 @@ app.get('/admin/dashboard', (req, res) => {
     document.querySelectorAll('.nav-item').forEach(b=>b.classList.remove('active'));
     btn.classList.add('active');
     sessionStorage.setItem('admin_section', id);
-    if(id === 'admin-messages') ensureAdminMessageUsersLoaded(false);
+    if(id === 'admin-messages'){ ensureAdminMessageUsersLoaded(false); refreshSentMessages(); }
   }
   // Restore last active section on load
   (function(){
@@ -2339,10 +2358,33 @@ app.get('/admin/dashboard', (req, res) => {
     }
   }
   async function refreshSentMessages(){
-    // Placeholder: in a real app, fetch recent messages sent by admin
     const container = document.getElementById('sentMessagesContainer');
     if(!container) return;
-    container.innerHTML = '<div class="empty-inline"><p>Send a message to get started</p></div>';
+    container.innerHTML = '<div class="empty-inline"><span style="color:var(--muted)">Loading…</span></div>';
+    try{
+      const r = await fetch('/admin/message/sent', { credentials:'include' });
+      if(!r.ok) throw new Error('Failed to load');
+      const msgs = await r.json();
+      if(!msgs.length){
+        container.innerHTML = '<div class="empty-inline"><p>No messages sent yet</p></div>';
+        return;
+      }
+      container.innerHTML = msgs.map(m => `
+        <div class="sent-msg-item">
+          <div class="sent-msg-row">
+            <span class="sent-msg-type ${m.type}">${m.type}</span>
+            <span class="sent-msg-to">${escapeHtmlClient(m.user_name)} &lt;${escapeHtmlClient(m.user_email)}&gt;</span>
+            <span class="sent-msg-date">${new Date(m.created_at).toLocaleDateString(undefined,{month:'short',day:'numeric',hour:'2-digit',minute:'2-digit'})}</span>
+            <span class="sent-msg-read ${m.is_read?'read':'unread'}">${m.is_read?'\u2713 Read':'\u25cf Unread'}</span>
+          </div>
+          <div class="sent-msg-subject">${escapeHtmlClient(m.subject)}</div>
+          <div class="sent-msg-body">${escapeHtmlClient(m.body)}</div>
+          ${m.user_reply ? `<div class="sent-msg-reply"><span class="sent-msg-reply-label">User replied</span>${escapeHtmlClient(m.user_reply)}</div>` : ''}
+        </div>
+      `).join('');
+    }catch(e){
+      container.innerHTML = '<div class="empty-inline"><p>Failed to load messages</p></div>';
+    }
   }
   // Initialize on page load
   document.addEventListener('DOMContentLoaded', () => {
@@ -2612,7 +2654,10 @@ app.get('/api/notifications/count', verifyToken, (req, res) => {
        WHERE (user_id = ? OR (user_id IS NULL AND user_email = ?))
          AND admin_reply IS NOT NULL AND seen_at IS NULL`
     ).get(req.user.id, req.user.email);
-    res.json({ count: row?.count || 0 });
+    const adminMsgRow = db.prepare(
+      `SELECT COUNT(*) AS count FROM admin_messages WHERE user_id = ? AND is_read = 0`
+    ).get(req.user.id);
+    res.json({ count: row?.count || 0, adminMessages: adminMsgRow?.count || 0 });
   } catch (err) {
     console.error('GET /api/notifications/count error:', err.message);
     res.status(500).json({ error: 'Failed to load' });
@@ -2808,6 +2853,26 @@ app.post('/admin/message/send', requireAdmin, (req, res) => {
   }
 });
 
+// ── GET /admin/message/sent ──────────────────────────────────────────────────
+// Get list of sent messages (with user replies) for admin
+app.get('/admin/message/sent', requireAdmin, (req, res) => {
+  try {
+    const messages = db.prepare(`
+      SELECT am.id, am.subject, am.body, am.type, am.is_read, am.created_at,
+             am.read_at, am.user_reply, am.user_replied_at,
+             u.name AS user_name, u.email AS user_email
+      FROM admin_messages am
+      JOIN users u ON u.id = am.user_id
+      ORDER BY am.created_at DESC
+      LIMIT 100
+    `).all();
+    res.json(messages);
+  } catch (err) {
+    console.error('Admin sent messages error:', err.message);
+    res.status(500).json({ error: err.message });
+  }
+});
+
 // ── GET /admin/message/users ──────────────────────────────────────────────────
 // Get list of users for admin message selector
 app.get('/admin/message/users', requireAdmin, (req, res) => {
@@ -2830,7 +2895,7 @@ app.get('/admin/message/users', requireAdmin, (req, res) => {
 app.get('/api/user/messages', verifyToken, (req, res) => {
   try {
     const messages = db.prepare(`
-      SELECT id, subject, body, type, is_read, created_at, read_at
+      SELECT id, subject, body, type, is_read, created_at, read_at, user_reply, user_replied_at
       FROM admin_messages
       WHERE user_id = ?
       ORDER BY created_at DESC
@@ -2845,6 +2910,8 @@ app.get('/api/user/messages', verifyToken, (req, res) => {
         isRead: !!m.is_read,
         createdAt: m.created_at,
         readAt: m.read_at,
+        userReply: m.user_reply || null,
+        userRepliedAt: m.user_replied_at || null,
       })),
       unreadCount,
     });
@@ -2871,6 +2938,32 @@ app.post('/api/user/messages/:id/read', verifyToken, (req, res) => {
     res.json({ ok: true });
   } catch (err) {
     console.error('POST /api/user/messages/:id/read error:', err.message);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// ── POST /api/user/messages/:id/reply ────────────────────────────────────────
+// User replies to an admin message
+app.post('/api/user/messages/:id/reply', verifyToken, (req, res) => {
+  const { id } = req.params;
+  const { reply } = req.body;
+  if (!id) return res.status(400).json({ error: 'Invalid message id' });
+  if (!reply || typeof reply !== 'string' || reply.trim().length < 1) {
+    return res.status(400).json({ error: 'Reply cannot be empty' });
+  }
+  try {
+    const msg = db.prepare('SELECT user_id, user_reply FROM admin_messages WHERE id = ?').get(id);
+    if (!msg) return res.status(404).json({ error: 'Message not found' });
+    if (msg.user_id !== req.user.id) return res.status(403).json({ error: 'Forbidden' });
+    if (msg.user_reply) return res.status(409).json({ error: 'Already replied' });
+    db.prepare(`
+      UPDATE admin_messages
+      SET user_reply = ?, user_replied_at = CURRENT_TIMESTAMP
+      WHERE id = ?
+    `).run(reply.trim().slice(0, 500), id);
+    res.json({ ok: true });
+  } catch (err) {
+    console.error('POST /api/user/messages/:id/reply error:', err.message);
     res.status(500).json({ error: err.message });
   }
 });
