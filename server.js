@@ -2990,7 +2990,7 @@ app.get('/api/conversations', verifyToken, (req, res) => {
 // ── PUT /api/conversations/:id ────────────────────────────────────────────────
 app.put('/api/conversations/:id', verifyToken, (req, res) => {
   const { id } = req.params;
-  const { title, model, messages, pinned, draft, projectId, project_id, created_at, updated_at } = req.body;
+  const { title, model, messages, pinned, draft, projectId, project_id, created_at, updated_at, createdAt, updatedAt } = req.body;
   if (!id || !Array.isArray(messages)) return res.status(400).json({ error: 'Missing fields' });
 
   // Strip base64 blobs before storing to keep conversations table lean
@@ -3030,8 +3030,8 @@ app.put('/api/conversations/:id', verifyToken, (req, res) => {
     pinned ? 1 : 0,
     typeof draft === 'string' ? draft : '',
     resolvedProjectId,
-    created_at || Date.now(),
-    updated_at || Date.now(),
+    created_at ?? createdAt ?? Date.now(),
+    updated_at ?? updatedAt ?? Date.now(),
     req.user.id
   );
 
