@@ -809,6 +809,11 @@ app.get('/admin/dashboard', (req, res) => {
   const repliedCount = contacts.filter(c => c.admin_reply && c.admin_reply.trim()).length;
   const unrepliedCount = totalContacts - repliedCount;
 
+  // Inbox (admin direct messages) stats
+  const adminMsgs = db.prepare('SELECT id, is_read FROM admin_messages').all();
+  const inboxTotal = adminMsgs.length;
+  const inboxUnread = adminMsgs.filter(m => !m.is_read).length;
+
   // Country distribution (top 8)
   const countryMap = {};
   users.forEach(u => { const c = u.country || 'Unknown'; countryMap[c] = (countryMap[c] || 0) + 1; });
@@ -1181,6 +1186,8 @@ app.get('/admin/dashboard', (req, res) => {
   .sent-msg-read{font-size:10px;font-weight:700;white-space:nowrap}
   .sent-msg-read.read{color:#34d399}
   .sent-msg-read.unread{color:#f87171}
+  .sent-msg-delete{margin-left:auto;background:none;border:none;cursor:pointer;color:var(--muted2);font-size:13px;padding:2px 6px;border-radius:4px;transition:color .15s,background .15s}
+  .sent-msg-delete:hover{color:#f87171;background:rgba(248,113,113,.12)}
   .sent-msg-subject{font-size:13px;font-weight:600;color:var(--text);margin-bottom:4px}
   .sent-msg-body{font-size:12px;color:var(--muted);line-height:1.5}
   .sent-msg-reply{margin-top:8px;padding:8px 12px;background:rgba(255,255,255,.03);border-left:3px solid var(--primary);border-radius:0 8px 8px 0}
@@ -1815,6 +1822,14 @@ app.get('/admin/dashboard', (req, res) => {
                 <div class="sys-label">${svg(ICONS.check, '#666', 12)}Response rate</div>
                 <div class="sys-value" style="color:#22c55e">${totalContacts ? Math.round((repliedCount / totalContacts) * 100) : 0}%</div>
               </div>
+              <div class="sys-item">
+                <div class="sys-label">${svg(ICONS.inbox, '#666', 12)}Inbox sent</div>
+                <div class="sys-value" style="color:#3b82f6">${inboxTotal}</div>
+              </div>
+              <div class="sys-item">
+                <div class="sys-label">${svg(ICONS.inbox, '#666', 12)}Inbox unread</div>
+                <div class="sys-value" style="color:#f59e0b">${inboxUnread}</div>
+              </div>
             </div>
           </div>
         </div>
@@ -2392,6 +2407,18 @@ app.get('/admin/dashboard', (req, res) => {
       btn.querySelector('span').textContent = origText;
     }
   }
+  async function deleteAdminMessage(id){
+    const ok = await showConfirm({ variant:'danger', icon:'alert', title:'Delete message', message:'This will permanently delete this inbox message. The user will no longer see it.' });
+    if(!ok) return;
+    try{
+      const r = await fetch('/admin/message/' + id, { method:'DELETE', credentials:'include' });
+      if(!r.ok) throw new Error('Failed');
+      const el = document.getElementById('sent-msg-' + id);
+      if(el) el.remove();
+      showToast('Message deleted');
+    }catch{ showToast('Failed to delete message','error'); }
+  }
+
   async function refreshSentMessages(){
     const container = document.getElementById('sentMessagesContainer');
     if(!container) return;
@@ -2411,12 +2438,13 @@ app.get('/admin/dashboard', (req, res) => {
         const readClass = m.is_read ? 'read' : 'unread';
         const readLabel = m.is_read ? '\u2713 Read' : '\u25cf Unread';
         const dateStr = new Date(m.created_at).toLocaleDateString(undefined, {month:'short',day:'numeric',hour:'2-digit',minute:'2-digit'});
-        return '<div class="sent-msg-item">'
+        return '<div class="sent-msg-item" id="sent-msg-' + m.id + '">'
           + '<div class="sent-msg-row">'
           + '<span class="sent-msg-type ' + m.type + '">' + m.type + '</span>'
           + '<span class="sent-msg-to">' + escapeHtmlClient(m.user_name) + ' &lt;' + escapeHtmlClient(m.user_email) + '&gt;</span>'
           + '<span class="sent-msg-date">' + dateStr + '</span>'
           + '<span class="sent-msg-read ' + readClass + '">' + readLabel + '</span>'
+          + '<button class="sent-msg-delete" onclick="deleteAdminMessage(' + m.id + ')" title="Delete message">&#10005;</button>'
           + '</div>'
           + '<div class="sent-msg-subject">' + escapeHtmlClient(m.subject) + '</div>'
           + '<div class="sent-msg-body">' + escapeHtmlClient(m.body) + '</div>'
@@ -2929,6 +2957,15 @@ app.get('/admin/message/sent', requireAdmin, (req, res) => {
     console.error('Admin sent messages error:', err.message);
     res.status(500).json({ error: err.message });
   }
+});
+
+// ── DELETE /admin/message/:id ─────────────────────────────────────────────────
+app.delete('/admin/message/:id', requireAdmin, (req, res) => {
+  const id = parseInt(req.params.id, 10);
+  if (!id) return res.status(400).json({ error: 'Invalid id' });
+  const result = db.prepare('DELETE FROM admin_messages WHERE id = ?').run(id);
+  if (result.changes === 0) return res.status(404).json({ error: 'Message not found' });
+  res.json({ ok: true });
 });
 
 // ── GET /admin/message/users ──────────────────────────────────────────────────
