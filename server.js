@@ -966,6 +966,7 @@ app.get('/admin/dashboard', (req, res) => {
           <span class="type-label msg-type">${typeIcon[c.type] || typeIcon.other}${escapeHtml(c.type)}</span>
           <span class="msg-date">${escapeHtml(c.created_at || '')}</span>
           <span id="cstatus-${c.id}" class="msg-status">${statusPill(c.status)}</span>
+          <button class="msg-delete-btn" onclick="deleteContactMessage(${c.id})" title="Delete message">${svg(ICONS.trash, '#ef4444', 12)}</button>
         </div>
         <div class="msg-subject">${escapeHtml(c.subject)}</div>
         <div class="msg-body">${escapeHtml(c.message)}</div>
@@ -1246,6 +1247,8 @@ app.get('/admin/dashboard', (req, res) => {
   /* Message item */
   .msg-item{background:#0f0f0f;border:1px solid var(--border-soft);border-radius:12px;padding:14px 16px;margin-top:12px}
   .msg-top{display:flex;align-items:center;gap:10px;font-size:11px;color:var(--muted);margin-bottom:8px;flex-wrap:wrap}
+  .msg-delete-btn{margin-left:auto;background:none;border:none;cursor:pointer;padding:2px 5px;border-radius:4px;opacity:.5;transition:opacity .15s,background .15s;display:flex;align-items:center}
+  .msg-delete-btn:hover{opacity:1;background:rgba(239,68,68,.12)}
   .type-dot{width:6px;height:6px;border-radius:50%}
   .type-label{display:inline-flex;align-items:center;gap:5px;font-weight:700;text-transform:capitalize;color:var(--text);font-size:11px}
   .msg-date{margin-left:auto;color:var(--muted2);font-size:11px}
@@ -2473,6 +2476,18 @@ app.get('/admin/dashboard', (req, res) => {
     if(!_allUsers.length) loadAdminMessageUsers(false);
   });
 
+  async function deleteContactMessage(id){
+    const ok = await showConfirm({ variant:'danger', icon:'alert', title:'Delete support message', message:'This will permanently delete this support message and its reply.' });
+    if(!ok) return;
+    try{
+      const r = await fetch('/admin/contact/'+id, { method:'DELETE', credentials:'include' });
+      if(!r.ok) throw new Error('Failed');
+      const row = document.getElementById('crow-'+id);
+      if(row) row.remove();
+      showToast('Message deleted');
+    }catch{ showToast('Failed to delete','error'); }
+  }
+
   async function cleanupOrphans(count){
     const ok = await showConfirm({
       variant:'warn', icon:'alert',
@@ -2785,6 +2800,15 @@ app.patch('/admin/contact/:id/status', requireAdmin, (req, res) => {
   } catch (err) {
     res.status(500).json({ error: err.message || 'Failed to update' });
   }
+});
+
+// ── DELETE /admin/contact/:id ────────────────────────────────────────────────
+app.delete('/admin/contact/:id', requireAdmin, (req, res) => {
+  const id = parseInt(req.params.id, 10);
+  if (!id) return res.status(400).json({ error: 'Invalid id' });
+  const result = db.prepare('DELETE FROM contact_messages WHERE id = ?').run(id);
+  if (result.changes === 0) return res.status(404).json({ error: 'Message not found' });
+  res.json({ ok: true });
 });
 
 // ── POST /admin/contact/cleanup-orphans ─────────────────────────────────────
