@@ -1343,6 +1343,8 @@ app.get('/admin/dashboard', (req, res) => {
   /* Feedback section */
   .sc-feedback::before{background:linear-gradient(90deg,#f59e0b,#d97706)}
   .sc-feedback .sc-icon{background:linear-gradient(135deg,#f59e0b,#d97706)}
+  .sc-inbox::before{background:linear-gradient(90deg,#3b82f6,#2563eb)}
+  .sc-inbox .sc-icon{background:linear-gradient(135deg,#3b82f6,#2563eb)}
   .fb-hero{background:var(--card);border:1px solid var(--border);border-radius:20px;padding:28px;margin-bottom:24px;display:grid;grid-template-columns:1fr 1fr;gap:28px;align-items:center}
   .fb-hero-main{text-align:center}
   .fb-rate{font-size:64px;font-weight:900;letter-spacing:-2px;background:linear-gradient(135deg,#22c55e,#4ade80);-webkit-background-clip:text;background-clip:text;-webkit-text-fill-color:transparent}
@@ -1642,6 +1644,12 @@ app.get('/admin/dashboard', (req, res) => {
           <div class="sc-label">Rejected</div>
           <div class="sc-value">${rejectedCount}</div>
           <div class="sc-delta down">${pct(rejectedCount)}% of total</div>
+        </div>
+        <div class="stat-card sc-inbox" style="cursor:pointer" onclick="showSection('admin-messages', document.querySelector('[data-section=admin-messages]'))">
+          <div class="sc-icon">${svg(ICONS.send, '#fff', 20)}</div>
+          <div class="sc-label">Inbox messages</div>
+          <div class="sc-value">${inboxTotal}</div>
+          <div class="sc-delta ${inboxUnread > 0 ? 'down' : 'up'}">${inboxUnread} unread</div>
         </div>
         <div class="stat-card sc-feedback">
           <div class="sc-icon">${svg(ICONS.thumbUp, '#fff', 20)}</div>
