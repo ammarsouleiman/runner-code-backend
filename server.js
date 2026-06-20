@@ -1547,7 +1547,7 @@ app.get('/admin/dashboard', (req, res) => {
         ${svg(ICONS.dashboard, 'currentColor', 16)}<span>Overview</span>
       </button>
       <button class="nav-item" data-section="messages" onclick="showSection('messages',this)">
-        ${svg(ICONS.inbox, 'currentColor', 16)}<span>Messages</span>
+        ${svg(ICONS.inbox, 'currentColor', 16)}<span>Support Messages</span>
         <span class="nav-badge">${contacts.length}</span>
       </button>
       <button class="nav-item" data-section="users" onclick="showSection('users',this)">
@@ -1563,7 +1563,7 @@ app.get('/admin/dashboard', (req, res) => {
         <span class="nav-badge">${totalReactions}</span>
       </button>
       <button class="nav-item" data-section="admin-messages" onclick="showSection('admin-messages',this)">
-        ${svg(ICONS.send, 'currentColor', 16)}<span>Send Message</span>
+        ${svg(ICONS.send, 'currentColor', 16)}<span>Inbox Messages</span>
       </button>
     </nav>
     <button class="logout-btn" onclick="logout()">
@@ -1865,7 +1865,7 @@ app.get('/admin/dashboard', (req, res) => {
     <section class="section" id="sec-messages">
       <div class="page-header">
         <div>
-          <div class="page-title">Contact Messages</div>
+          <div class="page-title">Support Messages</div>
           <div class="page-sub">${userGroups.length} user${userGroups.length === 1 ? '' : 's'} · ${contacts.length} message${contacts.length === 1 ? '' : 's'}${orphanCount ? ` · <span style="color:#f59e0b;font-weight:700">${orphanCount} orphan${orphanCount === 1 ? '' : 's'}</span>` : ''}</div>
         </div>
         <div style="display:flex;gap:10px;align-items:center;flex-wrap:wrap">
@@ -2051,11 +2051,11 @@ app.get('/admin/dashboard', (req, res) => {
       </div>
     </section>
 
-    <!-- Admin: Send Direct Message -->
+    <!-- Admin: Inbox Messages -->
     <section class="section" id="sec-admin-messages">
       <div class="page-header">
         <div>
-          <h2 class="page-title">Send Direct Message</h2>
+          <h2 class="page-title">Inbox Messages</h2>
           <p class="page-sub">Send notifications and important messages to users</p>
         </div>
       </div>
