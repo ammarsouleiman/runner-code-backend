@@ -2814,8 +2814,9 @@ app.post('/admin/contact/:id/reply', requireAdmin, (req, res) => {
   const contact = db.prepare('SELECT user_id, subject FROM contact_messages WHERE id = ?').get(id);
   if (contact?.user_id) {
     sendPushToUser(contact.user_id, {
-      title: '💬 Runner Code replied to your report',
+      title: 'Runner Code replied to your report',
       body: contact.subject || 'You have a new reply',
+      type: 'support',
       url: '/support',
     });
   }
@@ -2898,8 +2899,9 @@ app.post('/admin/message/send', requireAdmin, (req, res) => {
     console.log(`📨 Admin sent message to ${user.email} (id=${result.lastInsertRowid})`);
     // Push notification
     sendPushToUser(user_id, {
-      title: '📬 New message from Runner Code',
+      title: 'New message from Runner Code',
       body: subject,
+      type: 'inbox',
       url: '/messages',
     });
     res.json({ ok: true, id: result.lastInsertRowid });
