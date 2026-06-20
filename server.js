@@ -1567,6 +1567,7 @@ app.get('/admin/dashboard', (req, res) => {
       </button>
       <button class="nav-item" data-section="admin-messages" onclick="showSection('admin-messages',this)">
         ${svg(ICONS.send, 'currentColor', 16)}<span>Inbox Messages</span>
+        <span class="nav-badge">${inboxTotal}</span>
       </button>
     </nav>
     <button class="logout-btn" onclick="logout()">
@@ -1860,6 +1861,37 @@ app.get('/admin/dashboard', (req, res) => {
                 <span class="act-time">${escapeHtml(c.created_at || '')}</span>
               </div>
             </div>`).join('') : `<div class="empty-inline">${svg(ICONS.inbox, '#333', 32)}<p>No activity yet</p></div>`}
+        </div>
+      </div>
+
+      <!-- Inbox messages overview panel -->
+      <div class="panel">
+        <div class="panel-head">
+          <div>
+            <div class="panel-title">Inbox Messages</div>
+            <div class="panel-sub">${inboxTotal} sent · ${inboxUnread} unread</div>
+          </div>
+          <button class="panel-action" onclick="showSection('admin-messages', document.querySelector('[data-section=admin-messages]'))">View all ${svg(ICONS.send, 'currentColor', 12)}</button>
+        </div>
+        <div class="panel-body">
+          <div class="sys-grid">
+            <div class="sys-item">
+              <div class="sys-label">${svg(ICONS.send, '#666', 12)}Total sent</div>
+              <div class="sys-value" style="color:#3b82f6">${inboxTotal}</div>
+            </div>
+            <div class="sys-item">
+              <div class="sys-label">${svg(ICONS.inbox, '#666', 12)}Unread</div>
+              <div class="sys-value" style="color:#f59e0b">${inboxUnread}</div>
+            </div>
+            <div class="sys-item">
+              <div class="sys-label">${svg(ICONS.check, '#666', 12)}Read</div>
+              <div class="sys-value" style="color:#22c55e">${inboxTotal - inboxUnread}</div>
+            </div>
+            <div class="sys-item">
+              <div class="sys-label">${svg(ICONS.reply, '#666', 12)}Read rate</div>
+              <div class="sys-value" style="color:#8b5cf6">${inboxTotal ? Math.round(((inboxTotal - inboxUnread) / inboxTotal) * 100) : 0}%</div>
+            </div>
+          </div>
         </div>
       </div>
     </section>
