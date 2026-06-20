@@ -378,6 +378,7 @@ app.patch('/api/user/preferences', verifyToken, (req, res) => {
     theme:            (v) => v === 'dark' || v === 'light',
     sidebarOpen:      (v) => typeof v === 'boolean',
     adaptiveThinking: (v) => typeof v === 'boolean',
+    pushPromptDone:   (v) => typeof v === 'boolean',
   };
 
   const clean = {};
