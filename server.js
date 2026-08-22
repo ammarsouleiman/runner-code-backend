@@ -580,29 +580,6 @@ app.post('/api/chat', verifyToken, chatLimiter, async (req, res) => {
   }
 });
 
-// ── GET /api/images ───────────────────────────────────────────────────────────
-// Proxy to Pexels — keeps API key server-side only
-app.get('/api/images', verifyToken, async (req, res) => {
-  const PEXELS_KEY = process.env.PEXELS_API_KEY;
-  if (!PEXELS_KEY) return res.status(503).json({ error: 'Image service not configured' });
-
-  const { query, per_page = '6', page = '1' } = req.query;
-  const safePerPage = Math.min(Math.max(parseInt(per_page, 10) || 6, 1), 20);
-  const safePage = Math.max(parseInt(page, 10) || 1, 1);
-  if (!query) return res.status(400).json({ error: 'query is required' });
-
-  try {
-    const upstream = await fetch(
-      `https://api.pexels.com/v1/search?query=${encodeURIComponent(query)}&per_page=${safePerPage}&page=${safePage}`,
-      { headers: { Authorization: PEXELS_KEY } }
-    );
-    const data = await upstream.json();
-    res.json(data);
-  } catch (err) {
-    res.status(502).json({ error: 'Upstream image error' });
-  }
-});
-
 // ── Admin authentication ──────────────────────────────────────────────────────
 // Protected with ADMIN_KEY env variable. Login via POST /admin/login sets an
 // httpOnly cookie 'admin_session'. All admin endpoints require either that
